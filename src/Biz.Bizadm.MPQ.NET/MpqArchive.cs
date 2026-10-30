@@ -75,10 +75,85 @@ public sealed class MpqArchive : IDisposable
         if (mode == MpqOpenMode.ReadWrite && !stream.CanWrite)
             throw new ArgumentException("The stream must be writable for ReadWrite mode.", nameof(stream));
 
-        bool strict = (options ?? MpqOpenOptions.Default).Strict;
-        var (header, userData, headerOffset) = MpqHeaderReader.Find(stream, strict);
-        var table = MpqFileTable.Load(stream, header, headerOffset, strict);
-        return new MpqArchive(stream, leaveOpen, header, userData, headerOffset, table, mode);
+        options ??= MpqOpenOptions.Default;
+        var (header, userData, headerOffset) = MpqHeaderReader.Find(stream, options.Strict);
+        var table = MpqFileTable.Load(stream, header, headerOffset, options.Strict);
+        var archive = new MpqArchive(stream, leaveOpen, header, userData, headerOffset, table, mode);
+        archive.LoadInternalFiles(options);
+        return archive;
+    }
+
+    /// <summary>
+    /// Names files from <paramref name="fileNames"/> (StormLib SFileAddListFile); names already known are kept.
+    /// The names appear in <see cref="Entries"/>.
+    /// </summary>
+    public void AddListFile(IEnumerable<string> fileNames)
+    {
+        ArgumentNullException.ThrowIfNull(fileNames);
+        ThrowIfDisposed();
+        foreach (string name in fileNames)
+        {
+            if (!string.IsNullOrEmpty(name))
+                _table.AssignName(name);
+        }
+    }
+
+    /// <summary>
+    /// Applies the internal (listfile), the external list file and (attributes), like StormLib does when opening.
+    /// Unreadable internal files are ignored unless <see cref="MpqOpenOptions.Strict"/> is set.
+    /// </summary>
+    private void LoadInternalFiles(MpqOpenOptions options)
+    {
+        foreach (string name in new[] { ListFile.ListFileName, ListFile.AttributesName, ListFile.SignatureName })
+            _table.AssignName(name);
+
+        byte[]? listFile = ReadInternalFile(ListFile.ListFileName, ListFile.MaxSize, options.Strict);
+        if (listFile is not null)
+            AddListFile(ListFile.Parse(listFile));
+        if (options.ExternalListFile is not null)
+            AddListFile(options.ExternalListFile);
+
+        // StormLib sizes (attributes) by the header's block table size; without a block table it is not applied.
+        int blockTableSize = (int)Math.Min(Header.BlockTableSize, (uint)_table.Entries.Count);
+        byte[]? attributes = blockTableSize == 0
+            ? null
+            : ReadInternalFile(ListFile.AttributesName, MpqAttributes.MaxSize(blockTableSize), options.Strict);
+        if (attributes is not null)
+        {
+            try
+            {
+                MpqAttributes.Apply(attributes, blockTableSize, _table.Entries);
+            }
+            catch (InvalidDataException) when (!options.Strict)
+            {
+                // StormLib ignores (attributes) it cannot parse.
+            }
+        }
+    }
+
+    /// <param name="maxSize">Files declaring a larger size are not read (StormLib CreateListFileCache limit).</param>
+    private byte[]? ReadInternalFile(string name, long maxSize, bool strict)
+    {
+        if (FindExisting(name) is not { } entry)
+            return null;
+        if (entry.FileSize == 0 || entry.FileSize > maxSize)
+            return strict ? throw new InvalidDataException($"Unexpected size of {name}.") : null;
+        try
+        {
+            return CreateReader(name, entry.Clone()).ReadAll();
+        }
+        catch (Exception ex) when (!strict && ex is InvalidDataException or NotSupportedException or EndOfStreamException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private MpqSectorReader CreateReader(string fileName, MpqFileEntry snapshot)
+    {
+        uint key = snapshot.Flags.HasFlag(MpqFileFlags.Encrypted)
+            ? StormCrypto.GetFileKey(fileName, snapshot.FilePosition, snapshot.FileSize, snapshot.Flags.HasFlag(MpqFileFlags.FixKey))
+            : 0;
+        return new MpqSectorReader(_stream, _headerOffset, snapshot, Header.FormatVersion, Header.SectorSize, key);
     }
 
     /// <summary>Returns true when the file exists; '\' and '/' separators are interchangeable.</summary>
@@ -97,12 +172,7 @@ public sealed class MpqArchive : IDisposable
         ThrowIfDisposed();
 
         var entry = FindExisting(fileName) ?? throw new FileNotFoundException($"'{fileName}' was not found in the archive.", fileName);
-        var snapshot = entry.Clone();
-        uint key = snapshot.Flags.HasFlag(MpqFileFlags.Encrypted)
-            ? StormCrypto.GetFileKey(fileName, snapshot.FilePosition, snapshot.FileSize, snapshot.Flags.HasFlag(MpqFileFlags.FixKey))
-            : 0;
-        var reader = new MpqSectorReader(_stream, _headerOffset, snapshot, Header.FormatVersion, Header.SectorSize, key);
-        return new MpqFileStream(this, reader);
+        return new MpqFileStream(this, CreateReader(fileName, entry.Clone()));
     }
 
     public void Dispose()

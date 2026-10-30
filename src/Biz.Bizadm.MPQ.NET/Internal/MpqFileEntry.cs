@@ -24,6 +24,15 @@ internal sealed class MpqFileEntry
     public uint FileSize { get; set; }
     public MpqFileFlags Flags { get; set; }
 
+    /// <summary>CRC32 of the file data, from (attributes).</summary>
+    public uint Crc32 { get; set; }
+
+    /// <summary>FILETIME, from (attributes).</summary>
+    public long FileTime { get; set; }
+
+    /// <summary>MD5 of the file data, from (attributes); null when not present.</summary>
+    public byte[]? Md5 { get; set; }
+
     /// <summary>Snapshot used by open file streams, so later table changes do not affect them.</summary>
     public MpqFileEntry Clone() => (MpqFileEntry)MemberwiseClone();
 }

@@ -73,9 +73,6 @@ internal sealed class MpqSectorReader
 
         uint[] offsets = _sectorOffsets ??= ReadSectorOffsets();
         uint start = offsets[index], end = offsets[index + 1];
-        if (end < start)
-            throw new InvalidDataException($"Corrupt sector offset table (sector {index}).");
-
         byte[] data = ReadRaw(_filePosition + start, (int)(end - start));
         Decrypt(data, (uint)index);
         Decompress(data, output);
@@ -135,6 +132,18 @@ internal sealed class MpqSectorReader
         _stream.ReadExactlyAt(_filePosition, MemoryMarshal.AsBytes(offsets.AsSpan()));
         if (IsEncrypted)
             StormCrypto.DecryptBlock(offsets, RequireKey() - 1);
+
+        // StormLib AllocateSectorOffsets: offsets must not decrease, a stored sector must not exceed the sector size,
+        // and the first offset may exceed the table length by at most 0x400 extra bytes.
+        for (int i = 0; i < SectorCount; i++)
+        {
+            if (offsets[i + 1] < offsets[i] || offsets[i + 1] - offsets[i] > (uint)SectorSize)
+                throw new InvalidDataException("Corrupt sector offset table.");
+        }
+        // With MPQ_FILE_SECTOR_CRC, StormLib counts one more DWORD in the table length.
+        long tableLength = (count + (_entry.Flags.HasFlag(MpqFileFlags.SectorCrc) ? 1 : 0)) * 4L;
+        if ((offsets[0] & 0xFFFFFFFC) > tableLength && offsets[0] > tableLength + 0x400)
+            throw new InvalidDataException("Corrupt sector offset table.");
         return offsets;
     }
 
@@ -149,6 +158,9 @@ internal sealed class MpqSectorReader
 
     private byte[] ReadRaw(long position, int length)
     {
+        // Sizes come from the file and block tables; reject ones the stream cannot hold before allocating.
+        if (length < 0 || position < 0 || position > _stream.Length - length)
+            throw new InvalidDataException("File data lies outside the archive.");
         var buffer = new byte[length];
         _stream.ReadExactlyAt(position, buffer);
         return buffer;

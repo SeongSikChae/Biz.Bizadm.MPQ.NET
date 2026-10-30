@@ -123,6 +123,72 @@ internal sealed class MpqFileTable
         ?? (name.Contains('/') ? FindExact(name.Replace('/', '\\'), locale, platform) : null)
         ?? (name.Contains('\\') ? FindExact(name.Replace('\\', '/'), locale, platform) : null);
 
+    /// <summary>
+    /// StormLib SListFileCreateNodeForAllLocales: names every existing entry that <paramref name="name"/> resolves to,
+    /// in every locale, unless it already has a name.
+    /// </summary>
+    /// <returns>True when at least one entry was named.</returns>
+    /// <remarks>
+    /// With a HET table StormLib names the single entry GetFileEntryLocale returns; otherwise it scans the whole hash
+    /// table for slots with the same name pair (also outside the probe chain). Separator variants of the name are tried
+    /// like <see cref="Find"/>, and the variant that matched is stored as the name.
+    /// </remarks>
+    public bool AssignName(string name)
+    {
+        foreach (string candidate in NameCandidates(name))
+        {
+            IEnumerable<MpqFileEntry> matches = _het is not null
+                ? FindExact(candidate, 0, 0) is { } entry ? [entry] : []
+                : SlotsByName(candidate);
+
+            bool found = false, assigned = false;
+            foreach (var match in matches)
+            {
+                found = true;
+                if (match.FileName is null)
+                {
+                    match.FileName = candidate;
+                    assigned = true;
+                }
+            }
+            if (found)
+                return assigned;
+        }
+        return false;
+    }
+
+    private static IEnumerable<string> NameCandidates(string name)
+    {
+        yield return name;
+        if (name.Contains('/'))
+            yield return name.Replace('/', '\\');
+        if (name.Contains('\\'))
+            yield return name.Replace('\\', '/');
+    }
+
+    private Dictionary<(uint, uint), List<int>>? _slotsByName;
+
+    /// <summary>Block indexes of every hash slot with the name pair of <paramref name="name"/> (StormLib linear scan).</summary>
+    private IEnumerable<MpqFileEntry> SlotsByName(string name)
+    {
+        if (_slotsByName is null)
+        {
+            _slotsByName = [];
+            foreach (var slot in _hash)
+            {
+                uint blockIndex = slot.BlockIndex & MpqHashEntry.BlockIndexMask;
+                if (blockIndex >= _entries.Length)
+                    continue;
+                if (!_slotsByName.TryGetValue((slot.HashA, slot.HashB), out var list))
+                    _slotsByName[(slot.HashA, slot.HashB)] = list = [];
+                list.Add((int)blockIndex);
+            }
+        }
+
+        var key = (StormCrypto.HashStringSlash(name, MpqHashType.NameA), StormCrypto.HashStringSlash(name, MpqHashType.NameB));
+        return _slotsByName.TryGetValue(key, out var indexes) ? indexes.Select(i => _entries[i]) : [];
+    }
+
     /// <summary>StormLib GetFileEntryLocale: the classic hash table first, then the HET table.</summary>
     private MpqFileEntry? FindExact(string name, ushort locale, byte platform) =>
         FindInHashTable(name, locale, platform) ?? FindInHet(name);
