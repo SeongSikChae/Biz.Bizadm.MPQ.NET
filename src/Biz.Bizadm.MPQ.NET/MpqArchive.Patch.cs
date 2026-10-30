@@ -30,6 +30,7 @@ public sealed partial class MpqArchive
     /// Attaches a patch archive (StormLib SFileOpenPatchArchive). <see cref="OpenFile"/> then returns files with all
     /// patches of the chain applied. The archive must be open for reading only.
     /// </summary>
+    /// <param name="path">Path of the patch archive to open.</param>
     /// <param name="prefix">
     /// Folder of the patched files inside the patch archive. When null it is detected like StormLib does
     /// (World of Warcraft locale and base prefixes, StarCraft II archive placement); otherwise no prefix.

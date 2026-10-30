@@ -141,6 +141,7 @@ internal static class Fixtures
         };
         if (!SFileCreateArchive2(path, ref info, out nint mpq))
             throw Fail($"SFileCreateArchive2({archive.Name})");
+        bool closed;
         try
         {
             foreach (var file in archive.Files)
@@ -152,9 +153,10 @@ internal static class Fixtures
         }
         finally
         {
-            if (!SFileCloseArchive(mpq))
-                throw Fail($"SFileCloseArchive({archive.Name})");
+            closed = SFileCloseArchive(mpq);
         }
+        if (!closed)
+            throw Fail($"SFileCloseArchive({archive.Name})");
 
         if (archive.UserData)
             PrependUserData(path);
@@ -256,7 +258,7 @@ internal static class Fixtures
         return ms.ToArray();
     }
 
-    private static ExpectedArchive ReadExpected(string path, FixtureArchive archive, IReadOnlyDictionary<string, byte[]> inputs)
+    private static ExpectedArchive ReadExpected(string path, FixtureArchive archive, Dictionary<string, byte[]> inputs)
     {
         if (!SFileOpenArchive(path, 0, MPQ_OPEN_READ_ONLY, out nint mpq))
             throw Fail($"SFileOpenArchive({archive.Name})");
@@ -291,7 +293,7 @@ internal static class Fixtures
         }
     }
 
-    private static ExpectedArchive ReadPatchChainExpected(string outDir, IReadOnlyDictionary<string, byte[]> inputs)
+    private static ExpectedArchive ReadPatchChainExpected(string outDir, Dictionary<string, byte[]> inputs)
     {
         nint mpq = OpenChain(Path.Combine(outDir, PatchBase), [Path.Combine(outDir, PatchArchive)]);
         try

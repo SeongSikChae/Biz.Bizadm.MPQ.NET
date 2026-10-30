@@ -3,11 +3,13 @@ namespace Biz.Bizadm.MPQ.NET;
 /// <summary>Options for <see cref="MpqArchive.AddFile(string, Stream, MpqAddFileOptions?)"/>.</summary>
 public sealed class MpqAddFileOptions
 {
+    /// <summary>Default options.</summary>
     public static MpqAddFileOptions Default { get; } = new();
 
     /// <summary>Sector compression; <see cref="MpqCompressionType.None"/> stores the file uncompressed.</summary>
     public MpqCompressionType Compression { get; init; } = MpqCompressionType.Zlib;
 
+    /// <summary>Encrypt the file with the Storm file key.</summary>
     public bool Encrypt { get; init; }
 
     /// <summary>Adjust the encryption key by file position and size (MPQ_FILE_KEY_V2). Requires <see cref="Encrypt"/>.</summary>
@@ -19,6 +21,7 @@ public sealed class MpqAddFileOptions
     /// <summary>Store an adler32 checksum per sector. Ignored for single-unit or uncompressed files.</summary>
     public bool SectorCrc { get; init; }
 
+    /// <summary>Locale of the hash table slot (0 = neutral).</summary>
     public ushort Locale { get; init; }
 
     /// <summary>Replace a file with the same name and locale instead of throwing.</summary>

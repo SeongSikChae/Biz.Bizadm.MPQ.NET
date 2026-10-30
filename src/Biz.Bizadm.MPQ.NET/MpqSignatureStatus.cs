@@ -1,6 +1,6 @@
 namespace Biz.Bizadm.MPQ.NET;
 
-/// <summary>Result of <see cref="MpqArchive.VerifySignature"/> (StormLib SFileVerifyArchive codes).</summary>
+/// <summary>Result of <see cref="MpqArchive.VerifySignature()"/> (StormLib SFileVerifyArchive codes).</summary>
 public enum MpqSignatureStatus
 {
     /// <summary>The archive has no signature.</summary>
@@ -12,11 +12,13 @@ public enum MpqSignatureStatus
     /// </summary>
     WeakValid = 2,
 
+    /// <summary>The archive has a (signature) file, but the weak signature does not match.</summary>
     WeakInvalid = 3,
 
     /// <summary>The "NGIS" signature after the archive matches one of the known Blizzard public keys.</summary>
     StrongValid = 4,
 
+    /// <summary>The archive has a strong signature, but it does not match any known Blizzard public key.</summary>
     StrongInvalid = 5,
 
     /// <summary>

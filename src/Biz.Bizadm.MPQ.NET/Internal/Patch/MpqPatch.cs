@@ -36,10 +36,12 @@ internal static class MpqPatch
     /// StormLib Patch_Process: applies the patches to <paramref name="baseData"/> in order. A patch is skipped when the next
     /// one patches the same version (its md5_before equals the current MD5).
     /// </summary>
+    /// <param name="baseData">Unpatched base file bytes.</param>
     /// <param name="baseMd5">MD5 of the base file from (attributes); null when unknown.</param>
+    /// <param name="patchFiles">Patch file blobs in chain order.</param>
     /// <param name="maxFileSize">Largest file size in the chain (StormLib Patch_InitPatcher buffer size).</param>
-    /// <exception cref="InvalidDataException">A patch is corrupt or the patched data does not match its MD5.</exception>
     /// <param name="maxBufferSize">Largest patch data or patched file accepted; sizes come from the patch headers.</param>
+    /// <exception cref="InvalidDataException">A patch is corrupt or the patched data does not match its MD5.</exception>
     public static byte[] ApplyChain(byte[] baseData, byte[]? baseMd5, IReadOnlyList<byte[]> patchFiles, uint maxFileSize,
         int maxBufferSize = MpqSectorReader.DefaultMaxBufferSize)
     {

@@ -47,7 +47,10 @@ internal sealed class MpqFileTable
     /// then the file table from the BET table and, when a hash table exists, from the block and hi-block tables.
     /// Tables may be compressed (v2+). In <paramref name="strict"/> mode v4 table MD5 mismatches throw.
     /// </summary>
+    /// <param name="stream">Archive stream (readable and seekable).</param>
+    /// <param name="header">Parsed MPQ header.</param>
     /// <param name="headerOffset">Absolute position of the MPQ header.</param>
+    /// <param name="strict">Throw on v4 table MD5 mismatches.</param>
     public static MpqFileTable Load(Stream stream, MpqHeader header, long headerOffset, bool strict = false)
     {
         var layout = MpqTableLayout.From(header, stream.Length, headerOffset);
@@ -148,7 +151,12 @@ internal sealed class MpqFileTable
         long headerOffset, long fileSize, bool malformed, bool cut)
     {
         int blockCount = blockData.Length / BlockTableSerializer.EntrySize;
-        int[]? remap = cut ? Enumerable.Repeat(-1, blockCount).ToArray() : null;
+        int[]? remap = null;
+        if (cut)
+        {
+            remap = new int[blockCount];
+            remap.AsSpan().Fill(-1);
+        }
         int itemCount = 0;
         for (int i = 0; i < hash.Length; i++)
         {

@@ -29,7 +29,11 @@ internal sealed class MpqSectorReader
 
     private readonly int _maxBufferSize;
 
+    /// <param name="stream">Archive stream (readable and seekable).</param>
     /// <param name="headerOffset">Absolute position of the MPQ header.</param>
+    /// <param name="entry">File table entry for the stored file.</param>
+    /// <param name="version">Archive format version (affects file offset wrapping).</param>
+    /// <param name="sectorSize">Archive sector size in bytes.</param>
     /// <param name="fileKey">File key from <see cref="StormCrypto.GetFileKey"/>; required for encrypted files.</param>
     /// <param name="maxBufferSize">Largest whole-file buffer (single-unit files, <see cref="ReadAll"/>).</param>
     /// <exception cref="InvalidDataException">A single-unit file is larger than <paramref name="maxBufferSize"/>.</exception>

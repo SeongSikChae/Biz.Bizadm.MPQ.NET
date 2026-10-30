@@ -17,8 +17,9 @@ internal static class MpqHeaderReader
     private const int UserDataBlockSize = 0x10;
 
     /// <summary>Searches the stream at 512-byte steps for the MPQ header, following a user data block when present.</summary>
-    /// <returns>The header, the user data (or null) and the absolute position of the MPQ header.</returns>
+    /// <param name="stream">Seekable stream to search for the MPQ header.</param>
     /// <param name="strict">Verify the v4 header MD5 (MD5_MpqHeader over the first 0xC0 bytes) and throw on mismatch.</param>
+    /// <returns>The header, the user data (or null) and the absolute position of the MPQ header.</returns>
     /// <remarks>
     /// Like StormLib, a header whose size field is below 0x20 or that is recognized as fake (tables outside the file) is
     /// skipped and the search continues. The returned header has <see cref="MpqHeader.Malformed"/> set when it was repaired.
@@ -78,10 +79,12 @@ internal static class MpqHeaderReader
     }
 
     /// <summary>StormLib ConvertMpqHeaderToFormat4.</summary>
+    /// <param name="stream">Archive stream positioned for reading the header.</param>
     /// <param name="headerPosition">Position of the header.</param>
     /// <param name="position">
     /// StormLib ByteOffset: the search position, which is the user data block (not the header) when there is one.
     /// </param>
+    /// <param name="strict">Verify the v4 header MD5 and throw on mismatch.</param>
     /// <returns>Null for a fake header (ERROR_FAKE_MPQ_HEADER), so the search continues.</returns>
     /// <exception cref="InvalidDataException">The header is corrupt (ERROR_FILE_CORRUPT).</exception>
     private static MpqHeader? ReadHeader(Stream stream, long headerPosition, long position, bool strict)

@@ -32,11 +32,13 @@ public sealed partial class MpqArchive : IDisposable
         Mode = mode;
     }
 
+    /// <summary>Archive header.</summary>
     public MpqHeader Header { get; private set; }
 
     /// <summary>The "MPQ\x1B" user data block (StarCraft II replays and maps), or null.</summary>
     public MpqUserData? UserData { get; }
 
+    /// <summary>How the archive was opened.</summary>
     public MpqOpenMode Mode { get; }
 
     /// <summary>Absolute position of the MPQ header in the stream.</summary>
@@ -59,6 +61,7 @@ public sealed partial class MpqArchive : IDisposable
         }
     }
 
+    /// <summary>Opens an archive file.</summary>
     public static MpqArchive Open(string path, MpqOpenMode mode = MpqOpenMode.Read, MpqOpenOptions? options = null)
     {
         // StormLib opens archives with FILE_SHARE_READ in both modes (FileStream.cpp).
@@ -77,6 +80,9 @@ public sealed partial class MpqArchive : IDisposable
         }
     }
 
+    /// <summary>
+    /// Opens an archive from a seekable stream. When <paramref name="leaveOpen"/> is false, dispose closes the stream.
+    /// </summary>
     public static MpqArchive Open(Stream stream, MpqOpenMode mode = MpqOpenMode.Read, bool leaveOpen = false, MpqOpenOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -169,7 +175,9 @@ public sealed partial class MpqArchive : IDisposable
         }
     }
 
+    /// <param name="name">Internal file name (for example <c>(listfile)</c>).</param>
     /// <param name="maxSize">Files declaring a larger size are not read (StormLib CreateListFileCache limit).</param>
+    /// <param name="strict">Throw instead of returning null on size or read errors.</param>
     private byte[]? ReadInternalFile(string name, long maxSize, bool strict)
     {
         if (FindExisting(name) is not { } entry)

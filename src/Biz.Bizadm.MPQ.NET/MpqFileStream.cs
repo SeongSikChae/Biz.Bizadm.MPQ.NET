@@ -23,9 +23,16 @@ public sealed class MpqFileStream : Stream
         _reader = reader;
     }
 
+    /// <inheritdoc />
     public override bool CanRead => !_disposed && !_archive.IsDisposed;
+
+    /// <inheritdoc />
     public override bool CanSeek => !_disposed && !_archive.IsDisposed;
+
+    /// <inheritdoc />
     public override bool CanWrite => false;
+
+    /// <inheritdoc />
     public override long Length
     {
         get
@@ -35,6 +42,7 @@ public sealed class MpqFileStream : Stream
         }
     }
 
+    /// <inheritdoc />
     public override long Position
     {
         get
@@ -50,12 +58,14 @@ public sealed class MpqFileStream : Stream
         }
     }
 
+    /// <inheritdoc />
     public override int Read(byte[] buffer, int offset, int count)
     {
         ValidateBufferArguments(buffer, offset, count);
         return Read(buffer.AsSpan(offset, count));
     }
 
+    /// <inheritdoc />
     public override int Read(Span<byte> buffer)
     {
         ThrowIfDisposed();
@@ -76,6 +86,7 @@ public sealed class MpqFileStream : Stream
         return total;
     }
 
+    /// <inheritdoc />
     public override long Seek(long offset, SeekOrigin origin)
     {
         ThrowIfDisposed();
@@ -92,14 +103,18 @@ public sealed class MpqFileStream : Stream
         return _position;
     }
 
+    /// <inheritdoc />
     public override void Flush()
     {
     }
 
+    /// <inheritdoc />
     public override void SetLength(long value) => throw new NotSupportedException();
 
+    /// <inheritdoc />
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         if (!_disposed)

@@ -4,6 +4,7 @@ namespace Biz.Bizadm.MPQ.NET;
 [Flags]
 public enum MpqFileFlags : uint
 {
+    /// <summary>No flags.</summary>
     None = 0,
 
     /// <summary>Compressed with PKWARE Data Compression Library (old style, no compression mask byte).</summary>
@@ -12,6 +13,7 @@ public enum MpqFileFlags : uint
     /// <summary>Compressed with one or more methods given by the compression mask byte of each sector.</summary>
     Compress = 0x00000200,
 
+    /// <summary>The file is encrypted with the Storm file key.</summary>
     Encrypted = 0x00010000,
 
     /// <summary>The file key is adjusted by the file position and size (StormLib MPQ_FILE_KEY_V2, formerly FIX_KEY).</summary>
@@ -23,6 +25,7 @@ public enum MpqFileFlags : uint
     /// <summary>The file is stored as a single unit instead of sectors.</summary>
     SingleUnit = 0x01000000,
 
+    /// <summary>The file is a delete marker in a patch archive.</summary>
     DeleteMarker = 0x02000000,
 
     /// <summary>A CRC table follows the sector offset table.</summary>
@@ -31,5 +34,6 @@ public enum MpqFileFlags : uint
     /// <summary>The file is the (signature) file.</summary>
     Signature = 0x10000000,
 
+    /// <summary>The block table entry is in use.</summary>
     Exists = 0x80000000,
 }

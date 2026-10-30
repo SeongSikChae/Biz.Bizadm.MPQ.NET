@@ -12,7 +12,9 @@ internal static class MpqSectorWriter
 {
     private const MpqFileFlags CompressMask = MpqFileFlags.Compress | MpqFileFlags.Implode;
 
+    /// <param name="data">Uncompressed file bytes to store.</param>
     /// <param name="flags">Final block flags (already filtered).</param>
+    /// <param name="compression">Sector compression type when the file is compressed.</param>
     /// <param name="sectorSize">Archive sector size; single-unit files use one sector of the file size.</param>
     /// <param name="fileKey">File key for encrypted files, 0 otherwise.</param>
     /// <param name="emptySectorCrc">

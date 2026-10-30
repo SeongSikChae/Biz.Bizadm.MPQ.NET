@@ -5,7 +5,10 @@ namespace Biz.Bizadm.MPQ.NET;
 /// </summary>
 public sealed record MpqHeader
 {
+    /// <summary>Size of the header in bytes (<c>dwHeaderSize</c>).</summary>
     public required uint HeaderSize { get; init; }
+
+    /// <summary>Header format version (<c>wFormatVersion</c>).</summary>
     public required MpqFormatVersion FormatVersion { get; init; }
 
     /// <summary>Power of two exponent of the sector size: 512 &lt;&lt; <see cref="SectorSizeShift"/>.</summary>
@@ -38,6 +41,7 @@ public sealed record MpqHeader
     /// <summary>Version 4 fields, or null for older headers.</summary>
     public MpqHeaderV4? V4 { get; init; }
 
+    /// <summary>Sector size in bytes: 512 &lt;&lt; <see cref="SectorSizeShift"/>.</summary>
     public int SectorSize => 0x200 << SectorSizeShift;
 
     /// <summary>
@@ -50,19 +54,37 @@ public sealed record MpqHeader
 /// <summary>Version 4 header fields: compressed table sizes and MD5 checksums.</summary>
 public sealed record MpqHeaderV4
 {
+    /// <summary>Compressed size of the hash table on disk, or 0 when uncompressed.</summary>
     public required long HashTableSize64 { get; init; }
+
+    /// <summary>Compressed size of the block table on disk, or 0 when uncompressed.</summary>
     public required long BlockTableSize64 { get; init; }
+
+    /// <summary>Compressed size of the hi-block table on disk, or 0 when there is none.</summary>
     public required long HiBlockTableSize64 { get; init; }
+
+    /// <summary>Compressed size of the HET table on disk, or 0 when there is none.</summary>
     public required long HetTableSize64 { get; init; }
+
+    /// <summary>Compressed size of the BET table on disk, or 0 when there is none.</summary>
     public required long BetTableSize64 { get; init; }
 
     /// <summary>Size of the raw data chunks whose MD5 follows the file data.</summary>
     public required uint RawChunkSize { get; init; }
 
+    /// <summary>MD5 of the block table.</summary>
     public required ReadOnlyMemory<byte> Md5BlockTable { get; init; }
+
+    /// <summary>MD5 of the hash table.</summary>
     public required ReadOnlyMemory<byte> Md5HashTable { get; init; }
+
+    /// <summary>MD5 of the hi-block table.</summary>
     public required ReadOnlyMemory<byte> Md5HiBlockTable { get; init; }
+
+    /// <summary>MD5 of the BET table.</summary>
     public required ReadOnlyMemory<byte> Md5BetTable { get; init; }
+
+    /// <summary>MD5 of the HET table.</summary>
     public required ReadOnlyMemory<byte> Md5HetTable { get; init; }
 
     /// <summary>MD5 of the first 0xC0 bytes of the header.</summary>
