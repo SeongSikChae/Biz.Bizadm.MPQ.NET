@@ -5,7 +5,7 @@ namespace Biz.Bizadm.MPQ.NET;
 /// <summary>
 /// An MPQ archive. Several <see cref="MpqFileStream"/>s can be read concurrently; other members are not thread safe.
 /// </summary>
-public sealed class MpqArchive : IDisposable
+public sealed partial class MpqArchive : IDisposable
 {
     private readonly Stream _stream;
     private readonly bool _leaveOpen;
@@ -24,7 +24,7 @@ public sealed class MpqArchive : IDisposable
         Mode = mode;
     }
 
-    public MpqHeader Header { get; }
+    public MpqHeader Header { get; private set; }
 
     /// <summary>The "MPQ\x1B" user data block (StarCraft II replays and maps), or null.</summary>
     public MpqUserData? UserData { get; }
@@ -107,6 +107,10 @@ public sealed class MpqArchive : IDisposable
         foreach (string name in new[] { ListFile.ListFileName, ListFile.AttributesName, ListFile.SignatureName })
             _table.AssignName(name);
 
+        // Internal files that exist are rewritten on Flush with their current flags (StormLib InvalidateInternalFile).
+        _listFileFlags = FindExisting(ListFile.ListFileName)?.Flags;
+        _attributesFileFlags = FindExisting(ListFile.AttributesName)?.Flags;
+
         byte[]? listFile = ReadInternalFile(ListFile.ListFileName, ListFile.MaxSize, options.Strict);
         if (listFile is not null)
             AddListFile(ListFile.Parse(listFile));
@@ -122,7 +126,7 @@ public sealed class MpqArchive : IDisposable
         {
             try
             {
-                MpqAttributes.Apply(attributes, blockTableSize, _table.Entries);
+                _attributeFlags = MpqAttributes.Apply(attributes, blockTableSize, _table.Entries) & ~MpqAttributeFlags.PatchBit;
             }
             catch (InvalidDataException) when (!options.Strict)
             {
@@ -175,16 +179,26 @@ public sealed class MpqArchive : IDisposable
         return new MpqFileStream(this, CreateReader(fileName, entry.Clone()));
     }
 
+    /// <summary>Writes pending changes (see <see cref="Flush"/>) and closes the archive.</summary>
     public void Dispose()
     {
-        // Wait for in-progress sector reads so the stream is never closed under them.
-        lock (SyncRoot)
+        try
         {
-            if (_disposed)
-                return;
-            _disposed = true;
-            if (!_leaveOpen)
-                _stream.Dispose();
+            if (!_disposed && _dirty)
+                Flush();
+        }
+        finally
+        {
+            // Wait for in-progress sector reads so the stream is never closed under them.
+            lock (SyncRoot)
+            {
+                if (!_disposed)
+                {
+                    _disposed = true;
+                    if (!_leaveOpen)
+                        _stream.Dispose();
+                }
+            }
         }
     }
 

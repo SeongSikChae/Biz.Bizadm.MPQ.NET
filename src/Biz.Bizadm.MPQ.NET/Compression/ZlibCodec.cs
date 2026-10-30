@@ -18,4 +18,13 @@ internal static class ZlibCodec
             throw new InvalidDataException("Corrupt zlib data.", ex);
         }
     }
+
+    /// <summary>zlib stream at the default level (StormLib Compress_ZLIB with Z_DEFAULT_COMPRESSION).</summary>
+    public static byte[] Compress(ReadOnlySpan<byte> input)
+    {
+        var output = new MemoryStream();
+        using (var zlib = new ZLibStream(output, CompressionLevel.Optimal, leaveOpen: true))
+            zlib.Write(input);
+        return output.ToArray();
+    }
 }

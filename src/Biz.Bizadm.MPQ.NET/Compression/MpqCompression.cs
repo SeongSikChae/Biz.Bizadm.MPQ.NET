@@ -24,6 +24,90 @@ internal static class MpqCompression
         [MpqCompressionType.AdpcmStereo] = (input, output) => AdpcmCodec.Decompress(input, output, channels: 2),
     };
 
+    // StormLib cmp_table order (compression).
+    private static readonly MpqCompressionType[] CompressOrder =
+    [
+        MpqCompressionType.Sparse,
+        MpqCompressionType.AdpcmMono,
+        MpqCompressionType.AdpcmStereo,
+        MpqCompressionType.Huffman,
+        MpqCompressionType.Zlib,
+        MpqCompressionType.Pkware,
+        MpqCompressionType.BZip2,
+    ];
+
+    // v2+ archives can only be read back with these masks (StormLib SCompDecompress2).
+    private static readonly HashSet<MpqCompressionType> V2Masks =
+    [
+        MpqCompressionType.Zlib, MpqCompressionType.Pkware, MpqCompressionType.BZip2, MpqCompressionType.Lzma,
+        MpqCompressionType.Sparse, MpqCompressionType.Sparse | MpqCompressionType.Zlib,
+        MpqCompressionType.Sparse | MpqCompressionType.BZip2,
+        MpqCompressionType.AdpcmMono | MpqCompressionType.Huffman,
+        MpqCompressionType.AdpcmStereo | MpqCompressionType.Huffman,
+    ];
+
+    /// <summary>Throws when <paramref name="mask"/> cannot be used for sectors of the given archive version.</summary>
+    public static void ValidateMask(MpqCompressionType mask, MpqFormatVersion version)
+    {
+        if (mask == MpqCompressionType.Lzma)
+        {
+            if (version < MpqFormatVersion.Version2)
+                throw new NotSupportedException("LZMA requires a v2+ archive (in v1, 0x12 means BZip2 | Zlib).");
+            return;
+        }
+        if (mask == MpqCompressionType.None || ((byte)mask & ~CompressOrder.Aggregate(0, (all, m) => all | (byte)m)) != 0)
+            throw new ArgumentException($"Invalid compression mask 0x{(byte)mask:X2}.", nameof(mask));
+        if (version >= MpqFormatVersion.Version2 && !V2Masks.Contains(mask))
+            throw new NotSupportedException($"Compression mask 0x{(byte)mask:X2} cannot be read from v2+ archives.");
+    }
+
+    /// <summary>
+    /// StormLib SCompCompress: applies each masked method in cmp_table order; a method that does not save at least
+    /// 2 bytes is skipped. Returns the mask byte + data, or a copy of the input when nothing helped.
+    /// The caller stores the sector raw when the result is not smaller than the input.
+    /// </summary>
+    public static byte[] Compress(ReadOnlySpan<byte> input, MpqCompressionType mask)
+    {
+        if (input.IsEmpty)
+            return [];
+
+        MpqCompressionType[] steps = mask == MpqCompressionType.Lzma
+            ? [MpqCompressionType.Lzma]
+            : CompressOrder.Where(step => ((byte)mask & (byte)step) != 0).ToArray();
+
+        byte[] current = input.ToArray();
+        byte applied = 0;
+        int huffmanType = 0;
+        foreach (var step in steps)
+        {
+            byte[] output = step switch
+            {
+                MpqCompressionType.Sparse => SparseCodec.Compress(current),
+                // StormLib WriteDataToMpqFile passes level 4 for ADPCM: bit shift 5, then Huffman type 7.
+                MpqCompressionType.AdpcmMono => AdpcmCodec.Compress(current, channels: 1, bitShift: 5),
+                MpqCompressionType.AdpcmStereo => AdpcmCodec.Compress(current, channels: 2, bitShift: 5),
+                MpqCompressionType.Huffman => HuffmanCodec.Compress(current, huffmanType),
+                MpqCompressionType.Zlib => ZlibCodec.Compress(current),
+                MpqCompressionType.Pkware => PkwareCodec.Compress(current),
+                MpqCompressionType.BZip2 => BZip2Codec.Compress(current),
+                MpqCompressionType.Lzma => LzmaCodec.Compress(current),
+                _ => throw new NotSupportedException($"Compression {step} is not supported."),
+            };
+            if (step is MpqCompressionType.AdpcmMono or MpqCompressionType.AdpcmStereo)
+                huffmanType = 7;
+
+            if (output.Length <= current.Length - 2)
+            {
+                current = output;
+                applied |= (byte)step;
+            }
+        }
+
+        if (applied == 0)
+            return input.ToArray();
+        return [(mask == MpqCompressionType.Lzma ? (byte)MpqCompressionType.Lzma : applied), .. current];
+    }
+
     // StormLib dcmp_table order (v1).
     private static readonly MpqCompressionType[] V1Order =
     [

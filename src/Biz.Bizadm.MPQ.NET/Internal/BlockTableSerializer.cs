@@ -7,6 +7,22 @@ internal static class BlockTableSerializer
 {
     public const int EntrySize = 16;
 
+    /// <summary>Plain (not yet encrypted) table bytes; the file position keeps its low 32 bits.</summary>
+    public static byte[] Serialize(IReadOnlyList<MpqFileEntry> entries)
+    {
+        var table = new byte[entries.Count * EntrySize];
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            var raw = table.AsSpan(i * EntrySize, EntrySize);
+            BinaryPrimitives.WriteUInt32LittleEndian(raw, (uint)entry.FilePosition);
+            BinaryPrimitives.WriteUInt32LittleEndian(raw[4..], entry.CompressedSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(raw[8..], entry.FileSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(raw[12..], (uint)entry.Flags);
+        }
+        return table;
+    }
+
     /// <summary>Writes decrypted block entries (StormLib TMPQBlock) into the first entries of <paramref name="entries"/>.</summary>
     public static void Parse(ReadOnlySpan<byte> table, MpqFileEntry[] entries)
     {

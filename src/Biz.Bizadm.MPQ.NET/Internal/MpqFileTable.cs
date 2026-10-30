@@ -10,13 +10,13 @@ internal sealed class MpqFileTable
     private const long ExtTableMaxSize = 0x00100000;
 
     private readonly MpqHashEntry[] _hash;
-    private readonly MpqFileEntry[] _entries;
+    private readonly List<MpqFileEntry> _entries;
     private readonly HetTable? _het;
 
     public MpqFileTable(MpqHashEntry[] hash, MpqFileEntry[] entries, HetTable? het = null)
     {
         _hash = hash;
-        _entries = entries;
+        _entries = [.. entries];
         _het = het;
 
         // Copy the hash fields of the first slot that references each block.
@@ -177,7 +177,7 @@ internal sealed class MpqFileTable
             foreach (var slot in _hash)
             {
                 uint blockIndex = slot.BlockIndex & MpqHashEntry.BlockIndexMask;
-                if (blockIndex >= _entries.Length)
+                if (blockIndex >= _entries.Count)
                     continue;
                 if (!_slotsByName.TryGetValue((slot.HashA, slot.HashB), out var list))
                     _slotsByName[(slot.HashA, slot.HashB)] = list = [];
@@ -219,12 +219,12 @@ internal sealed class MpqFileTable
                 break;
 
             uint blockIndex = slot.BlockIndex & MpqHashEntry.BlockIndexMask;
-            if (slot.HashA == a && slot.HashB == b && blockIndex < _entries.Length)
+            if (slot.HashA == a && slot.HashB == b && blockIndex < _entries.Count)
             {
                 if ((locale != 0 || platform != 0) && slot.Locale == locale && slot.Platform == platform)
-                    return _entries[blockIndex];
+                    return _entries[(int)blockIndex];
                 if ((slot.Locale == 0 || slot.Locale == locale) && (slot.Platform == 0 || slot.Platform == platform))
-                    best = _entries[blockIndex];
+                    best = _entries[(int)blockIndex];
             }
 
             i = (i + 1) & mask;
@@ -232,5 +232,155 @@ internal sealed class MpqFileTable
         while (i != start);
 
         return best;
+    }
+
+    // ---- Modification (classic hash table only; HET/BET archives are rewritten in a later unit) ----
+
+    public int HashTableSize => _hash.Length;
+
+    /// <summary>Hash slot of <paramref name="name"/> with exactly this locale and platform (StormLib GetHashEntryExact), or -1.</summary>
+    public int FindSlotExact(string name, ushort locale, byte platform = 0)
+    {
+        int result = -1;
+        ProbeChain(name, (index, slot) =>
+        {
+            uint blockIndex = slot.BlockIndex & MpqHashEntry.BlockIndexMask;
+            if (blockIndex < _entries.Count && slot.Locale == locale && slot.Platform == platform)
+                result = index; // StormLib keeps the last match
+            return true;
+        });
+        return result;
+    }
+
+    /// <summary>
+    /// StormLib FindFreeHashEntry: a slot with the same name pair and locale, else the first deleted slot,
+    /// else the free slot that ends the chain; -1 when the table is full.
+    /// </summary>
+    public int FindFreeSlot(string name, ushort locale)
+    {
+        if (_hash.Length == 0)
+            return -1;
+
+        uint mask = (uint)_hash.Length - 1;
+        uint start = StormCrypto.HashStringSlash(name, MpqHashType.TableOffset) & mask;
+        uint a = StormCrypto.HashStringSlash(name, MpqHashType.NameA);
+        uint b = StormCrypto.HashStringSlash(name, MpqHashType.NameB);
+        int deleted = -1;
+        uint i = start;
+        do
+        {
+            var slot = _hash[i];
+            if (slot.HashA == a && slot.HashB == b && slot.Locale == locale)
+                return (int)i;
+            if (slot.BlockIndex == MpqHashEntry.Deleted && deleted < 0)
+                deleted = (int)i;
+            if (slot.BlockIndex == MpqHashEntry.Free)
+                return deleted >= 0 ? deleted : (int)i;
+            i = (i + 1) & mask;
+        }
+        while (i != start);
+        return deleted;
+    }
+
+    /// <summary>StormLib AllocateFileEntry: reuses the first entry that does not exist, otherwise appends.</summary>
+    public int AddEntry(MpqFileEntry entry)
+    {
+        _slotsByName = null;
+        int free = _entries.FindIndex(e => !e.Flags.HasFlag(MpqFileFlags.Exists));
+        if (free >= 0)
+        {
+            _entries[free] = entry;
+            return free;
+        }
+        _entries.Add(entry);
+        return _entries.Count - 1;
+    }
+
+    public int ExistingCount => _entries.Count(e => e.Flags.HasFlag(MpqFileFlags.Exists));
+
+    /// <summary>
+    /// StormLib DefragmentFileTable: removes entries that do not exist and remaps the hash table; slots of removed
+    /// entries become "deleted".
+    /// </summary>
+    public void Defragment()
+    {
+        var map = new int[_entries.Count];
+        var kept = new List<MpqFileEntry>(_entries.Count);
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            if (_entries[i].Flags.HasFlag(MpqFileFlags.Exists))
+            {
+                map[i] = kept.Count;
+                kept.Add(_entries[i]);
+            }
+            else
+            {
+                map[i] = -1;
+            }
+        }
+        if (kept.Count == _entries.Count)
+            return;
+
+        for (int i = 0; i < _hash.Length; i++)
+        {
+            var slot = _hash[i];
+            uint blockIndex = slot.BlockIndex & MpqHashEntry.BlockIndexMask;
+            if (blockIndex < _entries.Count)
+                _hash[i] = slot with { BlockIndex = map[blockIndex] >= 0 ? (uint)map[blockIndex] : MpqHashEntry.Deleted };
+        }
+        _entries.Clear();
+        _entries.AddRange(kept);
+        _slotsByName = null;
+    }
+
+    /// <summary>Points hash slot <paramref name="slotIndex"/> at block <paramref name="blockIndex"/> for <paramref name="name"/>.</summary>
+    public void SetSlot(int slotIndex, string name, ushort locale, int blockIndex)
+    {
+        var entry = _entries[blockIndex];
+        entry.HashA = StormCrypto.HashStringSlash(name, MpqHashType.NameA);
+        entry.HashB = StormCrypto.HashStringSlash(name, MpqHashType.NameB);
+        entry.Locale = locale;
+        entry.Platform = 0;
+        _hash[slotIndex] = new MpqHashEntry(entry.HashA, entry.HashB, locale, 0, 0, (uint)blockIndex);
+        _slotsByName = null;
+    }
+
+    /// <summary>
+    /// StormLib DeleteFileEntry: the slot becomes "deleted"; the block keeps its position, sizes and other flags but
+    /// loses MPQ_FILE_EXISTS and its name.
+    /// </summary>
+    public void DeleteSlot(int slotIndex)
+    {
+        uint blockIndex = _hash[slotIndex].BlockIndex & MpqHashEntry.BlockIndexMask;
+        if (blockIndex < _entries.Count)
+        {
+            var entry = _entries[(int)blockIndex];
+            entry.Flags &= ~MpqFileFlags.Exists;
+            entry.FileName = null;
+            entry.NameHash = 0;
+        }
+        _hash[slotIndex] = new MpqHashEntry(MpqHashEntry.Free, MpqHashEntry.Free, 0xFFFF, 0xFF, 0xFF, MpqHashEntry.Deleted);
+        _slotsByName = null;
+    }
+
+    private void ProbeChain(string name, Func<int, MpqHashEntry, bool> visit)
+    {
+        if (_hash.Length == 0)
+            return;
+        uint mask = (uint)_hash.Length - 1;
+        uint start = StormCrypto.HashStringSlash(name, MpqHashType.TableOffset) & mask;
+        uint a = StormCrypto.HashStringSlash(name, MpqHashType.NameA);
+        uint b = StormCrypto.HashStringSlash(name, MpqHashType.NameB);
+        uint i = start;
+        do
+        {
+            var slot = _hash[i];
+            if (slot.BlockIndex == MpqHashEntry.Free)
+                return;
+            if (slot.HashA == a && slot.HashB == b && !visit((int)i, slot))
+                return;
+            i = (i + 1) & mask;
+        }
+        while (i != start);
     }
 }

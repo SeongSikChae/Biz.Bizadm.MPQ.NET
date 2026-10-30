@@ -14,6 +14,23 @@ internal static class HashTableSerializer
 {
     public const int EntrySize = 16;
 
+    /// <summary>Plain (not yet encrypted) table bytes.</summary>
+    public static byte[] Serialize(IReadOnlyList<MpqHashEntry> entries)
+    {
+        var table = new byte[entries.Count * EntrySize];
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            var raw = table.AsSpan(i * EntrySize, EntrySize);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(raw, entry.HashA);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(raw[4..], entry.HashB);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(raw[8..],
+                entry.Locale | ((uint)entry.Platform << 16) | ((uint)entry.Flags << 24));
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(raw[12..], entry.BlockIndex);
+        }
+        return table;
+    }
+
     /// <summary>Parses a decrypted (and decompressed) hash table.</summary>
     public static MpqHashEntry[] Parse(ReadOnlySpan<byte> table)
     {
