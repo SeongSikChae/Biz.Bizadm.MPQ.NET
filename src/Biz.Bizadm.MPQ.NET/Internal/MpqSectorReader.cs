@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using Biz.Bizadm.MPQ.NET.Compression;
 using Biz.Bizadm.MPQ.NET.Compression.Legacy;
@@ -11,11 +12,18 @@ internal sealed class MpqSectorReader
 {
     private const MpqFileFlags CompressMask = MpqFileFlags.Compress | MpqFileFlags.Implode;
 
+    // StormLib TPatchInfo: dwLength, dwFlags, dwDataSize, MD5.
+    private const int PatchInfoSize = 0x1C;
+    private const uint PatchInfoValid = 0x80000000;
+
     private readonly Stream _stream;
+    // Start of the sector data; patch files have a TPatchInfo block before it.
     private readonly long _filePosition;
     private readonly MpqFileEntry _entry;
     private readonly MpqFormatVersion _version;
     private readonly uint _fileKey;
+    private readonly uint _dataSize;
+    private readonly uint _singleUnitSize;
     private uint[]? _sectorOffsets;
 
     /// <param name="headerOffset">Absolute position of the MPQ header.</param>
@@ -27,10 +35,26 @@ internal sealed class MpqSectorReader
         _entry = entry;
         _version = version;
         _fileKey = fileKey;
+        _dataSize = entry.FileSize;
+        _singleUnitSize = entry.CompressedSize;
+
+        if (entry.Flags.HasFlag(MpqFileFlags.PatchFile))
+        {
+            // StormLib AllocatePatchInfo: the data size comes from the patch info, the sectors follow it.
+            var info = ReadRaw(_filePosition, PatchInfoSize);
+            uint length = BinaryPrimitives.ReadUInt32LittleEndian(info);
+            if ((BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(4)) & PatchInfoValid) == 0 || length > 0x400)
+                throw new InvalidDataException("Invalid patch info.");
+            _dataSize = BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(8));
+            _filePosition += length;
+            // StormLib ReadMpqFileSingleUnit takes sizeof(TPatchInfo) off the compressed size.
+            if (_singleUnitSize > PatchInfoSize)
+                _singleUnitSize -= PatchInfoSize;
+        }
 
         bool singleUnit = entry.Flags.HasFlag(MpqFileFlags.SingleUnit);
-        SectorSize = singleUnit ? (int)entry.FileSize : sectorSize;
-        SectorCount = entry.FileSize == 0 ? 0 : singleUnit ? 1 : (int)((entry.FileSize - 1) / (uint)sectorSize) + 1;
+        SectorSize = singleUnit ? (int)_dataSize : sectorSize;
+        SectorCount = _dataSize == 0 ? 0 : singleUnit ? 1 : (int)((_dataSize - 1) / (uint)sectorSize) + 1;
     }
 
     /// <summary>Uncompressed size of a full sector; the whole file for single-unit files.</summary>
@@ -38,7 +62,8 @@ internal sealed class MpqSectorReader
 
     public int SectorCount { get; }
 
-    public long Length => _entry.FileSize;
+    /// <summary>Uncompressed size; for patch files the size of the patch data.</summary>
+    public long Length => _dataSize;
 
     private bool IsCompressed => (_entry.Flags & CompressMask) != 0;
 
@@ -46,7 +71,7 @@ internal sealed class MpqSectorReader
 
     /// <summary>Uncompressed size of sector <paramref name="index"/>.</summary>
     public int GetSectorLength(int index) =>
-        (int)Math.Min(SectorSize, _entry.FileSize - (long)index * SectorSize);
+        (int)Math.Min(SectorSize, _dataSize - (long)index * SectorSize);
 
     /// <summary>Reads sector <paramref name="index"/> into <paramref name="destination"/> and returns its length.</summary>
     public int ReadSector(int index, Span<byte> destination)
@@ -81,7 +106,7 @@ internal sealed class MpqSectorReader
 
     public byte[] ReadAll()
     {
-        var result = new byte[_entry.FileSize];
+        var result = new byte[_dataSize];
         for (int i = 0; i < SectorCount; i++)
             ReadSector(i, result.AsSpan(i * SectorSize));
         return result;
@@ -97,7 +122,7 @@ internal sealed class MpqSectorReader
             return;
         }
 
-        byte[] data = ReadRaw(_filePosition, (int)_entry.CompressedSize);
+        byte[] data = ReadRaw(_filePosition, (int)_singleUnitSize);
         Decrypt(data, 0);
         Decompress(data, output);
     }

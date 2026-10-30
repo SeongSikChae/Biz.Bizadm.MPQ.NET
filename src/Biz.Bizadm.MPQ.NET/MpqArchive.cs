@@ -169,25 +169,47 @@ public sealed partial class MpqArchive : IDisposable
         return new MpqSectorReader(_stream, _headerOffset, snapshot, Header.FormatVersion, Header.SectorSize, key);
     }
 
-    /// <summary>Returns true when the file exists; '\' and '/' separators are interchangeable.</summary>
+    /// <summary>
+    /// Returns true when the file exists; '\' and '/' separators are interchangeable. With patch archives, the whole
+    /// chain is searched.
+    /// </summary>
     public bool Contains(string fileName)
     {
         ArgumentNullException.ThrowIfNull(fileName);
         ThrowIfDisposed();
-        return FindExisting(fileName) is not null;
+        return _patchArchives.Count > 0 ? ResolvePatched(fileName) is not null : FindExisting(fileName) is not null;
     }
 
-    /// <summary>Opens a read-only, seekable stream over the uncompressed file data.</summary>
+    /// <summary>
+    /// Opens a read-only, seekable stream over the uncompressed file data. With patch archives (see
+    /// <see cref="OpenPatchArchive"/>), the newest version is returned with all patches applied.
+    /// </summary>
     /// <exception cref="FileNotFoundException">The file does not exist.</exception>
+    /// <exception cref="InvalidDataException">A patch of the file is corrupt.</exception>
     public Stream OpenFile(string fileName)
     {
         ArgumentNullException.ThrowIfNull(fileName);
         ThrowIfDisposed();
 
-        // Under the lock, so Compact cannot replace the stream between creating the reader and counting it.
+        if (_patchArchives.Count > 0)
+        {
+            var patched = ResolvePatched(fileName) ?? throw new FileNotFoundException($"'{fileName}' was not found in the archive.", fileName);
+            return OpenPatched(fileName, patched);
+        }
+
+        // Under the lock, so Compact cannot replace the stream between finding the entry and counting the stream.
         lock (SyncRoot)
         {
             var entry = FindExisting(fileName) ?? throw new FileNotFoundException($"'{fileName}' was not found in the archive.", fileName);
+            return OpenEntry(fileName, entry);
+        }
+    }
+
+    private MpqFileStream OpenEntry(string fileName, MpqFileEntry entry)
+    {
+        lock (SyncRoot)
+        {
+            ThrowIfDisposed();
             var stream = new MpqFileStream(this, CreateReader(fileName, entry.Clone()));
             _openFileStreams++;
             _openStreamDataEnd = Math.Max(_openStreamDataEnd, DataEnd(entry));
@@ -225,6 +247,9 @@ public sealed partial class MpqArchive : IDisposable
                         _stream.Dispose();
                 }
             }
+            // Patch archives belong to the chain of this archive.
+            foreach (var patch in _patchArchives)
+                patch.Dispose();
         }
     }
 
