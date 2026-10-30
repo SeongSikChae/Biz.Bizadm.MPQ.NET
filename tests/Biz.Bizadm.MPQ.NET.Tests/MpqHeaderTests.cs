@@ -10,7 +10,7 @@ public sealed class MpqHeaderTests
     public static IEnumerable<object[]> Archives =>
     [
         ["v1-zlib.mpq"], ["v1-pkware.mpq"], ["v1-encrypted.mpq"], ["v1-sector-options.mpq"], ["v1-legacy-masks.mpq"],
-        ["v1-weak-signed.mpq"], ["v2-bzip2.mpq"], ["sc2-userdata.SC2Replay"], ["patch-base.mpq"], ["patch-1.mpq"],
+        ["v1-weak-signed.mpq"], ["v2-bzip2.mpq"], ["v2-single-unit.mpq"], ["sc2-userdata.SC2Replay"], ["patch-base.mpq"], ["patch-1.mpq"],
         ["v3-lzma.mpq"], ["v4-mixed.mpq"],
     ];
 

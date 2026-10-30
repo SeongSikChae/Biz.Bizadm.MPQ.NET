@@ -36,14 +36,22 @@ internal static class Fixtures
         [
             new(Readme, Zlib | MPQ_FILE_ENCRYPTED, MPQ_COMPRESSION_ZLIB),
             new(FixtureInputs.Random, Zlib | MPQ_FILE_ENCRYPTED | MPQ_FILE_KEY_V2, MPQ_COMPRESSION_ZLIB),
-            new(Zeros, Zlib | MPQ_FILE_ENCRYPTED | MPQ_FILE_KEY_V2 | MPQ_FILE_SINGLE_UNIT, MPQ_COMPRESSION_ZLIB),
+            new(Zeros, Zlib | MPQ_FILE_ENCRYPTED | MPQ_FILE_KEY_V2, MPQ_COMPRESSION_ZLIB),
             new(Small, MPQ_FILE_ENCRYPTED | MPQ_FILE_KEY_V2, 0),
         ]),
         new("v1-sector-options.mpq", 1,
         [
-            new(Readme, Zlib | MPQ_FILE_SINGLE_UNIT, MPQ_COMPRESSION_ZLIB),
+            new(Readme, Zlib, MPQ_COMPRESSION_ZLIB),
             new(Zeros, Zlib | MPQ_FILE_SECTOR_CRC, MPQ_COMPRESSION_ZLIB),
             new(FixtureInputs.Random, 0, 0),
+        ]),
+        // StormLib strips MPQ_FILE_SINGLE_UNIT in v1 archives (MPQ_FILE_VALID_FLAGS_W3X), so single-unit files need v2+.
+        new("v2-single-unit.mpq", 2,
+        [
+            new(Readme, Zlib | MPQ_FILE_SINGLE_UNIT, MPQ_COMPRESSION_ZLIB),
+            new(Zeros, Zlib | MPQ_FILE_ENCRYPTED | MPQ_FILE_KEY_V2 | MPQ_FILE_SINGLE_UNIT, MPQ_COMPRESSION_ZLIB),
+            new(FixtureInputs.Random, MPQ_FILE_SINGLE_UNIT, 0),
+            new(Small, MPQ_FILE_ENCRYPTED | MPQ_FILE_SINGLE_UNIT, 0),
         ]),
         new("v2-bzip2.mpq", 2, Common(Zlib, MPQ_COMPRESSION_BZIP2)),
         new("v3-lzma.mpq", 3, Common(Zlib, MPQ_COMPRESSION_LZMA)),

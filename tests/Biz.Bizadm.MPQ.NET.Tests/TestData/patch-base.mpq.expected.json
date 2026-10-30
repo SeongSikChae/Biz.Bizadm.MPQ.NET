@@ -35,9 +35,9 @@
     {
       "name": "(attributes)",
       "size": 120,
-      "compressedSize": 99,
+      "compressedSize": 98,
       "flags": 2164261376,
-      "sha256": "EE1246121A6AB0A1BB44EC42FE99ED76BE19791F6F16DF241987EA8750B84D7E",
+      "sha256": "ABBDD9B16AC1CC7B2A7708DD79548B03F4CD70B02BF5BBCA2A695458C8098B32",
       "lossy": false,
       "internal": true
     }
