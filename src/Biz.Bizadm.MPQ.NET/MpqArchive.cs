@@ -75,8 +75,9 @@ public sealed class MpqArchive : IDisposable
         if (mode == MpqOpenMode.ReadWrite && !stream.CanWrite)
             throw new ArgumentException("The stream must be writable for ReadWrite mode.", nameof(stream));
 
-        var (header, userData, headerOffset) = MpqHeaderReader.Find(stream);
-        var table = MpqFileTable.Load(stream, header, headerOffset);
+        bool strict = (options ?? MpqOpenOptions.Default).Strict;
+        var (header, userData, headerOffset) = MpqHeaderReader.Find(stream, strict);
+        var table = MpqFileTable.Load(stream, header, headerOffset, strict);
         return new MpqArchive(stream, leaveOpen, header, userData, headerOffset, table, mode);
     }
 

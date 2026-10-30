@@ -18,7 +18,8 @@ internal static class MpqHeaderReader
 
     /// <summary>Searches the stream at 512-byte steps for the MPQ header, following a user data block when present.</summary>
     /// <returns>The header, the user data (or null) and the absolute position of the MPQ header.</returns>
-    public static (MpqHeader Header, MpqUserData? UserData, long HeaderOffset) Find(Stream stream)
+    /// <param name="strict">Verify the v4 header MD5 (MD5_MpqHeader over the first 0xC0 bytes) and throw on mismatch.</param>
+    public static (MpqHeader Header, MpqUserData? UserData, long HeaderOffset) Find(Stream stream, bool strict = false)
     {
         for (long pos = 0; pos + HeaderSizeV1 <= stream.Length; pos += SearchStep)
         {
@@ -28,11 +29,11 @@ internal static class MpqHeaderReader
                 var userData = ReadUserData(stream, pos);
                 long headerPos = pos + userData.HeaderOffset;
                 if (headerPos + HeaderSizeV1 <= stream.Length && ReadUInt32At(stream, headerPos) == HeaderSignature)
-                    return (ReadHeader(stream, headerPos), userData, headerPos);
+                    return (ReadHeader(stream, headerPos, strict), userData, headerPos);
             }
             else if (signature == HeaderSignature)
             {
-                return (ReadHeader(stream, pos), null, pos);
+                return (ReadHeader(stream, pos, strict), null, pos);
             }
         }
         throw new InvalidDataException("MPQ header not found.");
@@ -59,7 +60,7 @@ internal static class MpqHeaderReader
         };
     }
 
-    private static MpqHeader ReadHeader(Stream stream, long position)
+    private static MpqHeader ReadHeader(Stream stream, long position, bool strict)
     {
         var buffer = new byte[(int)Math.Min(HeaderSizeV4, stream.Length - position)];
         stream.ReadExactlyAt(position, buffer);
@@ -67,6 +68,9 @@ internal static class MpqHeaderReader
 
         uint headerSize = BinaryPrimitives.ReadUInt32LittleEndian(h[0x04..]);
         var version = (MpqFormatVersion)BinaryPrimitives.ReadUInt16LittleEndian(h[0x0C..]);
+        // StormLib (SBaseFileTable.cpp, default case) treats unknown format versions as a v1 header.
+        if (version > MpqFormatVersion.Version4)
+            version = MpqFormatVersion.Version1;
         long hashTablePos = BinaryPrimitives.ReadUInt32LittleEndian(h[0x10..]);
         long blockTablePos = BinaryPrimitives.ReadUInt32LittleEndian(h[0x14..]);
         long archiveSize = BinaryPrimitives.ReadUInt32LittleEndian(h[0x08..]);
@@ -104,6 +108,7 @@ internal static class MpqHeaderReader
                 Md5HetTable = buffer.AsMemory(0xB0, 0x10),
                 Md5MpqHeader = buffer.AsMemory(0xC0, 0x10),
             };
+            MpqTableReader.VerifyMd5(h[..0xC0], v4.Md5MpqHeader, strict, "MPQ header");
         }
 
         return new MpqHeader

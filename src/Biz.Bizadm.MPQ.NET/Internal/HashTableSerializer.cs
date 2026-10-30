@@ -14,14 +14,11 @@ internal static class HashTableSerializer
 {
     public const int EntrySize = 16;
 
-    /// <summary>Reads and decrypts <paramref name="count"/> entries at an absolute stream position.</summary>
-    public static MpqHashEntry[] Read(Stream stream, long position, uint count)
+    /// <summary>Parses a decrypted (and decompressed) hash table.</summary>
+    public static MpqHashEntry[] Parse(ReadOnlySpan<byte> table)
     {
-        var raw = new uint[count * 4];
-        stream.ReadExactlyAt(position, MemoryMarshal.AsBytes(raw.AsSpan()));
-        StormCrypto.DecryptBlock(raw, StormCrypto.HashTableKey);
-
-        var entries = new MpqHashEntry[count];
+        ReadOnlySpan<uint> raw = MemoryMarshal.Cast<byte, uint>(table[..(table.Length / EntrySize * EntrySize)]);
+        var entries = new MpqHashEntry[raw.Length / 4];
         for (int i = 0; i < entries.Length; i++)
         {
             uint localePlatform = raw[i * 4 + 2];
