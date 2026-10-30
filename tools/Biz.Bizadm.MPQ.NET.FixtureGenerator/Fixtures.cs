@@ -29,7 +29,8 @@ internal static class Fixtures
 
     public static readonly FixtureArchive[] Archives =
     [
-        new("v1-zlib.mpq", 1, Common(Zlib, MPQ_COMPRESSION_ZLIB)),
+        // text/slash.txt: StormLib stores '/' as is (HashStringSlash), so this name is hashed with '/'.
+        new("v1-zlib.mpq", 1, [.. Common(Zlib, MPQ_COMPRESSION_ZLIB), new("text/slash.txt", Zlib, MPQ_COMPRESSION_ZLIB, Input: Small)]),
         new("v1-pkware.mpq", 1, Common(MPQ_FILE_IMPLODE, 0)),
         new("v1-encrypted.mpq", 1,
         [

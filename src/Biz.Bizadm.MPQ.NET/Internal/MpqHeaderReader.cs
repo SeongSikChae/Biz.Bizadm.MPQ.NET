@@ -41,14 +41,14 @@ internal static class MpqHeaderReader
     private static MpqUserData ReadUserData(Stream stream, long position)
     {
         Span<byte> block = stackalloc byte[UserDataBlockSize];
-        ReadAt(stream, position, block);
+        stream.ReadExactlyAt(position, block);
         uint userDataSize = BinaryPrimitives.ReadUInt32LittleEndian(block[4..]);
         uint headerOffset = BinaryPrimitives.ReadUInt32LittleEndian(block[8..]);
         uint contentSize = BinaryPrimitives.ReadUInt32LittleEndian(block[12..]);
 
         long available = Math.Max(0, stream.Length - position - UserDataBlockSize);
         var content = new byte[Math.Min(contentSize, available)];
-        ReadAt(stream, position + UserDataBlockSize, content);
+        stream.ReadExactlyAt(position + UserDataBlockSize, content);
 
         return new MpqUserData
         {
@@ -62,7 +62,7 @@ internal static class MpqHeaderReader
     private static MpqHeader ReadHeader(Stream stream, long position)
     {
         var buffer = new byte[(int)Math.Min(HeaderSizeV4, stream.Length - position)];
-        ReadAt(stream, position, buffer);
+        stream.ReadExactlyAt(position, buffer);
         ReadOnlySpan<byte> h = buffer;
 
         uint headerSize = BinaryPrimitives.ReadUInt32LittleEndian(h[0x04..]);
@@ -126,13 +126,7 @@ internal static class MpqHeaderReader
     private static uint ReadUInt32At(Stream stream, long position)
     {
         Span<byte> buffer = stackalloc byte[4];
-        ReadAt(stream, position, buffer);
+        stream.ReadExactlyAt(position, buffer);
         return BinaryPrimitives.ReadUInt32LittleEndian(buffer);
-    }
-
-    private static void ReadAt(Stream stream, long position, Span<byte> buffer)
-    {
-        stream.Position = position;
-        stream.ReadExactly(buffer);
     }
 }

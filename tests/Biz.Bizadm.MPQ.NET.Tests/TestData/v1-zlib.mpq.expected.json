@@ -51,20 +51,29 @@
       "internal": false
     },
     {
+      "name": "text/slash.txt",
+      "size": 3,
+      "compressedSize": 11,
+      "flags": 2147484160,
+      "sha256": "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD",
+      "lossy": false,
+      "internal": false
+    },
+    {
       "name": "(listfile)",
-      "size": 77,
-      "compressedSize": 69,
+      "size": 93,
+      "compressedSize": 81,
       "flags": 2147680768,
-      "sha256": "25E5757C18F2131A27865631535147549CB3AF1C598DEA0AC86A1941A712EC13",
+      "sha256": "48485D8EF3C427D5D37FD10DC56A1BE2A53F967D8899DC93913A089C2A21A4D2",
       "lossy": false,
       "internal": true
     },
     {
       "name": "(attributes)",
-      "size": 204,
+      "size": 232,
       "compressedSize": 160,
       "flags": 2147680768,
-      "sha256": "05D2FBEFB12D479C8537CDB418CCEA88D203F0A22C8071928F75BFE936ED573E",
+      "sha256": "31D25A0D9AD72637E36D3BCFD6F315AACDC8AEADFB706D39EC481DAF2541525B",
       "lossy": false,
       "internal": true
     }
