@@ -7,8 +7,13 @@ namespace Biz.Bizadm.MPQ.NET;
 /// </summary>
 public sealed partial class MpqArchive : IDisposable
 {
-    private readonly Stream _stream;
+    // Replaced by Compact when the archive was opened from a path.
+    private Stream _stream;
     private readonly bool _leaveOpen;
+    private string? _path;
+    private int _openFileStreams;
+    // End of the data read by open file streams; new data is not written before it, even when the file is deleted.
+    private long _openStreamDataEnd;
     private readonly long _headerOffset;
     private readonly MpqFileTable _table;
     private volatile bool _disposed;
@@ -58,7 +63,9 @@ public sealed partial class MpqArchive : IDisposable
         var stream = new FileStream(path, FileMode.Open, access, FileShare.Read);
         try
         {
-            return Open(stream, mode, leaveOpen: false, options);
+            var archive = Open(stream, mode, leaveOpen: false, options);
+            archive._path = Path.GetFullPath(path);
+            return archive;
         }
         catch
         {
@@ -176,8 +183,25 @@ public sealed partial class MpqArchive : IDisposable
         ArgumentNullException.ThrowIfNull(fileName);
         ThrowIfDisposed();
 
-        var entry = FindExisting(fileName) ?? throw new FileNotFoundException($"'{fileName}' was not found in the archive.", fileName);
-        return new MpqFileStream(this, CreateReader(fileName, entry.Clone()));
+        // Under the lock, so Compact cannot replace the stream between creating the reader and counting it.
+        lock (SyncRoot)
+        {
+            var entry = FindExisting(fileName) ?? throw new FileNotFoundException($"'{fileName}' was not found in the archive.", fileName);
+            var stream = new MpqFileStream(this, CreateReader(fileName, entry.Clone()));
+            _openFileStreams++;
+            _openStreamDataEnd = Math.Max(_openStreamDataEnd, DataEnd(entry));
+            return stream;
+        }
+    }
+
+    /// <summary>Called once by every <see cref="MpqFileStream"/> when it is disposed.</summary>
+    internal void FileStreamClosed()
+    {
+        lock (SyncRoot)
+        {
+            if (--_openFileStreams == 0)
+                _openStreamDataEnd = 0;
+        }
     }
 
     /// <summary>Writes pending changes (see <see cref="Flush"/>) and closes the archive.</summary>

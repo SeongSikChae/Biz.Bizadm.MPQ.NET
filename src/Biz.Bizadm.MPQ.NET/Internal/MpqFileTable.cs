@@ -203,16 +203,22 @@ internal sealed class MpqFileTable
     /// StormLib GetFirstHashEntry/GetNextHashEntry/GetHashEntryLocale: an exact non-neutral locale and platform match wins
     /// immediately; otherwise the last slot whose locale and platform are neutral or matching.
     /// </summary>
-    private MpqFileEntry? FindInHashTable(string name, ushort locale, byte platform)
+    private MpqFileEntry? FindInHashTable(string name, ushort locale, byte platform) =>
+        FindSlotByLocale(name, locale, platform) is var slot and >= 0
+            ? _entries[(int)(_hash[slot].BlockIndex & MpqHashEntry.BlockIndexMask)]
+            : null;
+
+    /// <returns>The hash slot <see cref="FindInHashTable"/> resolves to, or -1.</returns>
+    private int FindSlotByLocale(string name, ushort locale, byte platform)
     {
         if (_hash.Length == 0)
-            return null;
+            return -1;
 
         uint mask = (uint)_hash.Length - 1;
         uint start = StormCrypto.HashStringSlash(name, MpqHashType.TableOffset) & mask;
         uint a = StormCrypto.HashStringSlash(name, MpqHashType.NameA);
         uint b = StormCrypto.HashStringSlash(name, MpqHashType.NameB);
-        MpqFileEntry? best = null;
+        int best = -1;
 
         uint i = start;
         do
@@ -225,9 +231,9 @@ internal sealed class MpqFileTable
             if (slot.HashA == a && slot.HashB == b && blockIndex < _entries.Count)
             {
                 if ((locale != 0 || platform != 0) && slot.Locale == locale && slot.Platform == platform)
-                    return _entries[(int)blockIndex];
+                    return (int)i;
                 if ((slot.Locale == 0 || slot.Locale == locale) && (slot.Platform == 0 || slot.Platform == platform))
-                    best = _entries[(int)blockIndex];
+                    best = (int)i;
             }
 
             i = (i + 1) & mask;
@@ -235,6 +241,42 @@ internal sealed class MpqFileTable
         while (i != start);
 
         return best;
+    }
+
+    /// <summary>
+    /// The hash slot of an existing file in the neutral locale (StormLib GetFileEntryLocale with the hash entry), trying
+    /// the separator variants like <see cref="Find"/>; -1 when there is none.
+    /// </summary>
+    public int FindSlot(string name)
+    {
+        foreach (string candidate in NameCandidates(name))
+        {
+            int slot = FindSlotByLocale(candidate, 0, 0);
+            // Patch files are only handled through a patch chain, like when reading.
+            if (slot >= 0 && _entries[(int)(_hash[slot].BlockIndex & MpqHashEntry.BlockIndexMask)].Flags is var flags
+                && flags.HasFlag(MpqFileFlags.Exists) && !flags.HasFlag(MpqFileFlags.PatchFile))
+                return slot;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// StormLib RenameFileEntry: the old hash slot is marked deleted and the entry gets a new slot for
+    /// <paramref name="newName"/> with the same locale and platform.
+    /// </summary>
+    public void RenameSlot(int slotIndex, string newName)
+    {
+        var old = _hash[slotIndex];
+        int blockIndex = (int)(old.BlockIndex & MpqHashEntry.BlockIndexMask);
+        _hash[slotIndex] = new MpqHashEntry(MpqHashEntry.Free, MpqHashEntry.Free, 0xFFFF, 0xFF, 0xFF, MpqHashEntry.Deleted);
+
+        var entry = _entries[blockIndex];
+        entry.FileName = newName;
+        if (_het is not null)
+            entry.NameHash = _het.HashName(newName);
+        // A slot was just freed, so this always succeeds.
+        int slot = FindFreeSlot(newName, old.Locale);
+        SetSlot(slot, newName, old.Locale, blockIndex, old.Platform);
     }
 
     // ---- Modification ----
@@ -344,14 +386,14 @@ internal sealed class MpqFileTable
     }
 
     /// <summary>Points hash slot <paramref name="slotIndex"/> at block <paramref name="blockIndex"/> for <paramref name="name"/>.</summary>
-    public void SetSlot(int slotIndex, string name, ushort locale, int blockIndex)
+    public void SetSlot(int slotIndex, string name, ushort locale, int blockIndex, byte platform = 0)
     {
         var entry = _entries[blockIndex];
         entry.HashA = StormCrypto.HashStringSlash(name, MpqHashType.NameA);
         entry.HashB = StormCrypto.HashStringSlash(name, MpqHashType.NameB);
         entry.Locale = locale;
-        entry.Platform = 0;
-        _hash[slotIndex] = new MpqHashEntry(entry.HashA, entry.HashB, locale, 0, 0, (uint)blockIndex);
+        entry.Platform = platform;
+        _hash[slotIndex] = new MpqHashEntry(entry.HashA, entry.HashB, locale, platform, 0, (uint)blockIndex);
         _slotsByName = null;
     }
 

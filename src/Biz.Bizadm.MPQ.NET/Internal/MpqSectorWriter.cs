@@ -85,6 +85,56 @@ internal static class MpqSectorWriter
         return output.ToArray();
     }
 
+    /// <summary>
+    /// StormLib RecryptFileData / CopyMpqFileSectors: re-encrypts stored file data from <paramref name="oldKey"/> to
+    /// <paramref name="newKey"/> without recompressing. The sector offset table (its length is the decrypted first offset)
+    /// uses key - 1 and sector i uses key + i; the sector CRC table is not encrypted.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The sector offsets lie outside the stored data.</exception>
+    public static void Recrypt(Span<byte> stored, MpqFileFlags flags, uint fileSize, int sectorSize, uint oldKey, uint newKey)
+    {
+        if (oldKey == newKey || stored.IsEmpty || fileSize == 0)
+            return;
+
+        bool singleUnit = flags.HasFlag(MpqFileFlags.SingleUnit);
+        if ((flags & CompressMask) == 0 || singleUnit)
+        {
+            int size = singleUnit ? stored.Length : sectorSize;
+            for (int i = 0, offset = 0; offset < stored.Length; i++, offset += size)
+                RecryptBlock(stored.Slice(offset, Math.Min(size, stored.Length - offset)), oldKey + (uint)i, newKey + (uint)i);
+            return;
+        }
+
+        int sectorCount = (int)((fileSize - 1) / (uint)sectorSize + 1);
+        if (stored.Length < 4)
+            throw new InvalidDataException("The sector offset table is outside the file data.");
+        Span<uint> first = [BinaryPrimitives.ReadUInt32LittleEndian(stored)];
+        StormCrypto.DecryptBlock(first, oldKey - 1);
+        uint tableLength = first[0];
+        if (tableLength < (sectorCount + 1) * 4L || tableLength > stored.Length || tableLength % 4 != 0)
+            throw new InvalidDataException("Invalid sector offset table.");
+
+        var table = stored[..(int)tableLength];
+        StormCrypto.DecryptBlock(table, oldKey - 1);
+        var offsets = new uint[sectorCount + 1];
+        for (int i = 0; i <= sectorCount; i++)
+            offsets[i] = BinaryPrimitives.ReadUInt32LittleEndian(table[(i * 4)..]);
+        StormCrypto.EncryptBlock(table, newKey - 1);
+
+        for (int i = 0; i < sectorCount; i++)
+        {
+            if (offsets[i] > offsets[i + 1] || offsets[i + 1] > stored.Length)
+                throw new InvalidDataException("Invalid sector offset table.");
+            RecryptBlock(stored[(int)offsets[i]..(int)offsets[i + 1]], oldKey + (uint)i, newKey + (uint)i);
+        }
+    }
+
+    private static void RecryptBlock(Span<byte> block, uint oldKey, uint newKey)
+    {
+        StormCrypto.DecryptBlock(block, oldKey);
+        StormCrypto.EncryptBlock(block, newKey);
+    }
+
     /// <summary>Compressed sector, or the sector itself when compression does not make it smaller.</summary>
     private static byte[] CompressSector(ReadOnlySpan<byte> sector, MpqFileFlags flags, MpqCompressionType compression)
     {

@@ -102,7 +102,11 @@ public sealed class MpqFileStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        _disposed = true;
+        if (!_disposed)
+        {
+            _disposed = true;
+            _archive.FileStreamClosed();
+        }
         base.Dispose(disposing);
     }
 

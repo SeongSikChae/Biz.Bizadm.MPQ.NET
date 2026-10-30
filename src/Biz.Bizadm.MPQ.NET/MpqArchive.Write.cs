@@ -27,7 +27,9 @@ public sealed partial class MpqArchive
         var stream = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
         try
         {
-            return Create(stream, options, leaveOpen: false);
+            var archive = Create(stream, options, leaveOpen: false);
+            archive._path = Path.GetFullPath(path);
+            return archive;
         }
         catch
         {
@@ -181,9 +183,7 @@ public sealed partial class MpqArchive
                 throw new InvalidOperationException($"'{name}' already exists in the archive.");
 
             long position = FindFreeSpace(includeInternalFiles: savingTables);
-            if (Header.FormatVersion == MpqFormatVersion.Version1
-                && position + data.Length + _table.HashTableSize * 16L + (_table.Entries.Count + 1) * 16L > uint.MaxValue)
-                throw new IOException("A v1 archive cannot exceed 4 GB.");
+            EnsureV1Size(position, data.Length);
 
             if (!savingTables)
                 InvalidateInternalFiles();
@@ -230,6 +230,14 @@ public sealed partial class MpqArchive
             _table.RebuildHet();
             _dirty = true;
         }
+    }
+
+    /// <summary>A v1 archive, with its tables and one more block entry, must stay below 4 GB.</summary>
+    private void EnsureV1Size(long position, long length)
+    {
+        if (Header.FormatVersion == MpqFormatVersion.Version1
+            && position + length + _table.HashTableSize * 16L + (_table.Entries.Count + 1) * 16L > uint.MaxValue)
+            throw new IOException("A v1 archive cannot exceed 4 GB.");
     }
 
     /// <summary>StormLib SFileCreateFile + SFileAddFile_Init flag rules.</summary>
@@ -286,14 +294,15 @@ public sealed partial class MpqArchive
                 continue;
             // StormLib compares the end of the data with the current end, which already includes MD5s.
             if (entry.FilePosition + entry.CompressedSize > end)
-            {
-                end = entry.FilePosition + entry.CompressedSize;
-                if (RawChunkSize != 0)
-                    end += ((entry.CompressedSize - 1) / RawChunkSize + 1) * (long)MD5.HashSizeInBytes;
-            }
+                end = DataEnd(entry);
         }
-        return end;
+        // Data of deleted or replaced files that open streams still read is not overwritten.
+        return Math.Max(end, _openStreamDataEnd);
     }
+
+    /// <summary>End of the stored data of <paramref name="entry"/>, including its raw chunk MD5s (v4).</summary>
+    private long DataEnd(MpqFileEntry entry) =>
+        entry.FilePosition + entry.CompressedSize + RawChunkMd5Size(entry.CompressedSize);
 
     private void WriteTablesAndHeader()
     {
