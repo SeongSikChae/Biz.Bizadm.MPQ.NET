@@ -6,15 +6,16 @@ namespace Biz.Bizadm.MPQ.NET.Tests;
 [TestClass]
 public sealed class MpqSectorReaderTests
 {
-    /// <summary>Archives whose files use only zlib or no compression (other codecs arrive in unit 8).</summary>
-    public static IEnumerable<object[]> ZlibArchives =>
+    /// <summary>Every fixture archive (patch-1.mpq is excluded: its expected file describes the patch chain).</summary>
+    public static IEnumerable<object[]> AllArchives =>
     [
         ["v1-zlib.mpq"], ["v1-encrypted.mpq"], ["v1-sector-options.mpq"], ["v1-weak-signed.mpq"],
-        ["sc2-userdata.SC2Replay"], ["patch-base.mpq"], ["v2-single-unit.mpq"],
+        ["sc2-userdata.SC2Replay"], ["patch-base.mpq"], ["v2-single-unit.mpq"], ["v1-pkware.mpq"], ["v1-legacy-masks.mpq"],
+        ["v2-bzip2.mpq"], ["v3-lzma.mpq"], ["v4-mixed.mpq"],
     ];
 
     [TestMethod]
-    [DynamicData(nameof(ZlibArchives))]
+    [DynamicData(nameof(AllArchives))]
     public void ReadAll_MatchesStormLib(string archive)
     {
         var expected = ExpectedArchive.Load(archive);

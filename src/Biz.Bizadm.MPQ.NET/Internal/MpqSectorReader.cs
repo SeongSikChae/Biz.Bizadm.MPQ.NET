@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Biz.Bizadm.MPQ.NET.Compression;
+using Biz.Bizadm.MPQ.NET.Compression.Legacy;
 
 namespace Biz.Bizadm.MPQ.NET.Internal;
 
@@ -118,9 +119,10 @@ internal sealed class MpqSectorReader
             return;
         }
 
+        // MPQ_FILE_IMPLODE (old style): raw PKWARE data without a compression mask byte.
         int written = _entry.Flags.HasFlag(MpqFileFlags.Compress)
             ? MpqCompression.Decompress(data, output, _version)
-            : throw new NotSupportedException("PKWARE implode compression is not supported.");
+            : PkwareCodec.Decompress(data, output);
 
         // StormLib: a sector that decompresses to less than expected is padded with zeros.
         output[written..].Clear();

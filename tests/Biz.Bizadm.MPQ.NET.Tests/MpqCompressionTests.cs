@@ -52,6 +52,25 @@ public sealed class MpqCompressionTests
     }
 
     [TestMethod]
+    [DataRow(MpqFormatVersion.Version1)]
+    [DataRow(MpqFormatVersion.Version2)]
+    public void Decompress_MapsCorruptZlibToInvalidData(MpqFormatVersion version)
+    {
+        byte[] input = [(byte)MpqCompressionType.Zlib, 0x78, 0x9C, 0xFF, 0xFF, 0xFF, 0x00, 0x12];
+        Assert.ThrowsExactly<InvalidDataException>(() => MpqCompression.Decompress(input, new byte[64], version));
+    }
+
+    /// <summary>StormLib rejects empty output only in v1 (SCompDecompressInternal), not in v2+ (SCompDecompress2).</summary>
+    [TestMethod]
+    public void Decompress_EmptyOutputFailsOnlyInV1()
+    {
+        byte[] input = [(byte)MpqCompressionType.Zlib, .. ZlibCompress([])];
+
+        Assert.AreEqual(0, MpqCompression.Decompress(input, new byte[64], MpqFormatVersion.Version2));
+        Assert.ThrowsExactly<InvalidDataException>(() => MpqCompression.Decompress(input, new byte[64], MpqFormatVersion.Version1));
+    }
+
+    [TestMethod]
     public void Decompress_RejectsInputLargerThanOutput()
     {
         Assert.ThrowsExactly<InvalidDataException>(() => MpqCompression.Decompress(new byte[8], new byte[4], MpqFormatVersion.Version1));

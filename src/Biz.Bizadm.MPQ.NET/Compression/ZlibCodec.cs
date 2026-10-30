@@ -7,8 +7,15 @@ internal static class ZlibCodec
 {
     public static int Decompress(ReadOnlySpan<byte> input, Span<byte> output)
     {
-        using var source = new MemoryStream(input.ToArray(), writable: false);
-        using var zlib = new ZLibStream(source, CompressionMode.Decompress);
-        return zlib.ReadAtLeast(output, output.Length, throwOnEndOfStream: false);
+        try
+        {
+            using var source = new MemoryStream(input.ToArray(), writable: false);
+            using var zlib = new ZLibStream(source, CompressionMode.Decompress);
+            return zlib.ReadAtLeast(output, output.Length, throwOnEndOfStream: false);
+        }
+        catch (Exception ex) when (ex is not InvalidDataException)
+        {
+            throw new InvalidDataException("Corrupt zlib data.", ex);
+        }
     }
 }

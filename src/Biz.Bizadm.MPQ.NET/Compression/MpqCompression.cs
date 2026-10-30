@@ -1,4 +1,5 @@
 using System.Buffers;
+using Biz.Bizadm.MPQ.NET.Compression.Legacy;
 
 namespace Biz.Bizadm.MPQ.NET.Compression;
 
@@ -14,6 +15,13 @@ internal static class MpqCompression
     private static readonly Dictionary<MpqCompressionType, Decompressor> Codecs = new()
     {
         [MpqCompressionType.Zlib] = ZlibCodec.Decompress,
+        [MpqCompressionType.BZip2] = BZip2Codec.Decompress,
+        [MpqCompressionType.Lzma] = LzmaCodec.Decompress,
+        [MpqCompressionType.Sparse] = SparseCodec.Decompress,
+        [MpqCompressionType.Pkware] = PkwareCodec.Decompress,
+        [MpqCompressionType.Huffman] = HuffmanCodec.Decompress,
+        [MpqCompressionType.AdpcmMono] = (input, output) => AdpcmCodec.Decompress(input, output, channels: 1),
+        [MpqCompressionType.AdpcmStereo] = (input, output) => AdpcmCodec.Decompress(input, output, channels: 2),
     };
 
     // StormLib dcmp_table order (v1).
@@ -48,7 +56,7 @@ internal static class MpqCompression
         var data = input[1..];
         return version >= MpqFormatVersion.Version2
             ? DecompressV2(mask, data, output)
-            : Apply(SplitV1(mask), data, output);
+            : Apply(SplitV1(mask), data, output, rejectEmptyOutput: true);
     }
 
     private static int DecompressV2(MpqCompressionType mask, ReadOnlySpan<byte> data, Span<byte> output)
@@ -63,7 +71,7 @@ internal static class MpqCompression
             MpqCompressionType.AdpcmStereo | MpqCompressionType.Huffman => [MpqCompressionType.Huffman, MpqCompressionType.AdpcmStereo],
             _ => throw new InvalidDataException($"Compression mask 0x{(byte)mask:X2} is not valid in v2+ archives."),
         };
-        return Apply(steps, data, output);
+        return Apply(steps, data, output, rejectEmptyOutput: false);
     }
 
     private static MpqCompressionType[] SplitV1(MpqCompressionType mask)
@@ -75,8 +83,11 @@ internal static class MpqCompression
         return steps;
     }
 
-    /// <summary>Applies the decompressions in order; each step may produce up to the expected size.</summary>
-    private static int Apply(MpqCompressionType[] steps, ReadOnlySpan<byte> data, Span<byte> output)
+    /// <summary>
+    /// Applies the decompressions in order; each step may produce up to the expected size. StormLib treats a step
+    /// producing no data as corrupt only for v1 (SCompDecompressInternal); v2+ (SCompDecompress2) accepts it.
+    /// </summary>
+    private static int Apply(MpqCompressionType[] steps, ReadOnlySpan<byte> data, Span<byte> output, bool rejectEmptyOutput)
     {
         foreach (var step in steps)
         {
@@ -95,7 +106,7 @@ internal static class MpqCompression
                 bool last = i == steps.Length - 1;
                 Span<byte> target = last ? output : (i % 2 == 0 ? work! : next!).AsSpan(0, output.Length);
                 written = Codecs[steps[i]](current, target);
-                if (written <= 0)
+                if (written == 0 && rejectEmptyOutput)
                     throw new InvalidDataException($"{steps[i]} decompression produced no data.");
                 current = target[..written];
             }
