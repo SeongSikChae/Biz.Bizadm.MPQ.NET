@@ -25,7 +25,7 @@ internal static class LzmaCodec
             using var lzma = LzmaStream.Create(properties, data, data.Length, output.Length, leaveOpen: false);
             return lzma.ReadAtLeast(output, output.Length, throwOnEndOfStream: false);
         }
-        catch (Exception ex) when (ex is not InvalidDataException)
+        catch (Exception ex) when (ex is not (InvalidDataException or OutOfMemoryException))
         {
             throw new InvalidDataException("Corrupt LZMA data.", ex);
         }

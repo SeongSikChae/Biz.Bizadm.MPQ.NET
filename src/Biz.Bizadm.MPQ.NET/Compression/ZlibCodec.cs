@@ -13,7 +13,7 @@ internal static class ZlibCodec
             using var zlib = new ZLibStream(source, CompressionMode.Decompress);
             return zlib.ReadAtLeast(output, output.Length, throwOnEndOfStream: false);
         }
-        catch (Exception ex) when (ex is not InvalidDataException)
+        catch (Exception ex) when (ex is not (InvalidDataException or OutOfMemoryException))
         {
             throw new InvalidDataException("Corrupt zlib data.", ex);
         }

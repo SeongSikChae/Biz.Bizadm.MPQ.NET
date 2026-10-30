@@ -10,8 +10,20 @@ public sealed partial class MpqArchive
 
     /// <summary>
     /// Verifies the weak (signature) file or the strong "NGIS" signature after the archive (StormLib
-    /// SFileVerifyArchive). Pending changes are flushed first.
+    /// SFileVerifyArchive). Pending changes are flushed first, so on a writable archive this writes them.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only <see cref="MpqSignatureStatus.StrongValid"/> says something about who made the archive. The weak signature
+    /// uses a private key that is public, so anyone (including this library on every change) can produce
+    /// <see cref="MpqSignatureStatus.WeakValid"/>; it only detects accidental damage.
+    /// </para>
+    /// <para>
+    /// The signed range starts at the MPQ header (or at the start of the file for Warcraft III maps with an "HM3W"
+    /// header), so data before the header, such as StarCraft II user data, is not covered by either signature. When an
+    /// archive has a (signature) file, a strong signature after the archive is not checked.
+    /// </para>
+    /// </remarks>
     public MpqSignatureStatus VerifySignature() => VerifySignature(MpqSignature.StrongKeys);
 
     /// <param name="strongKeys">Public keys for strong signatures, tried in order.</param>
@@ -24,16 +36,16 @@ public sealed partial class MpqArchive
             if (_dirty)
                 Flush();
 
-            var (begin, end) = SignedRange();
+            var (begin, end) = SignedRange(_stream);
             if (FindExisting(ListFile.SignatureName) is { CompressedSize: MpqSignature.FileSize } entry)
             {
                 long position = _headerOffset + entry.FilePosition;
                 var signature = new byte[MpqSignature.FileSize];
                 _stream.ReadExactlyAt(position, signature);
-                // A zeroed signature is not checked.
+                // A zeroed signature is not checked (StormLib reports it as valid).
                 if (!MpqSignature.IsWeakSigned(signature))
-                    return MpqSignatureStatus.WeakValid;
-                byte[] md5 = HashRange(begin, end, position, position + MpqSignature.FileSize, [], MD5.Create())[0];
+                    return MpqSignatureStatus.WeakUnsigned;
+                byte[] md5 = HashRange(_stream, begin, end, position, position + MpqSignature.FileSize, [], MD5.Create())[0];
                 return MpqSignature.VerifyWeak(signature, md5, MpqSignature.WeakPublicKey)
                     ? MpqSignatureStatus.WeakValid
                     : MpqSignatureStatus.WeakInvalid;
@@ -48,7 +60,7 @@ public sealed partial class MpqArchive
                     return MpqSignatureStatus.None;
 
                 string plainName = _path is null ? "" : Path.GetFileName(_path);
-                byte[][] digests = HashRange(begin, end, 0, 0,
+                byte[][] digests = HashRange(_stream, begin, end, 0, 0,
                     [[], MpqSignature.Tail(plainName), MpqSignature.Tail("ARCHIVE")], SHA1.Create(), SHA1.Create(), SHA1.Create());
                 foreach (var (key, tail) in strongKeys)
                 {
@@ -81,31 +93,31 @@ public sealed partial class MpqArchive
     }
 
     /// <summary>StormLib SSignFileFinish: signs the MD5 of the archive and writes it over the zeroed (signature).</summary>
-    private void FinishWeakSignature()
+    private void FinishWeakSignature(Stream target)
     {
         var entry = FindExisting(ListFile.SignatureName);
         if (entry is not { CompressedSize: MpqSignature.FileSize })
             throw new InvalidDataException("The (signature) file has an unexpected size.");
 
-        var (begin, end) = SignedRange();
+        var (begin, end) = SignedRange(target);
         long position = _headerOffset + entry.FilePosition;
-        byte[] md5 = HashRange(begin, end, position, position + MpqSignature.FileSize, [], MD5.Create())[0];
-        _stream.Position = position;
-        _stream.Write(MpqSignature.SignWeak(md5, MpqSignature.WeakPrivateKey));
-        _stream.Flush();
+        byte[] md5 = HashRange(target, begin, end, position, position + MpqSignature.FileSize, [], MD5.Create())[0];
+        target.Position = position;
+        target.Write(MpqSignature.SignWeak(md5, MpqSignature.WeakPrivateKey));
+        target.Flush();
     }
 
     /// <summary>
     /// StormLib CalculateArchiveRange: from the MPQ header (or the start of the file for Warcraft III maps with an
     /// "HM3W" header) to the end of the archive.
     /// </summary>
-    private (long Begin, long End) SignedRange()
+    private (long Begin, long End) SignedRange(Stream stream)
     {
         long begin = _headerOffset;
-        if (_stream.Length >= 0x200)
+        if (stream.Length >= 0x200)
         {
             Span<byte> magic = stackalloc byte[4];
-            _stream.ReadExactlyAt(0, magic);
+            stream.ReadExactlyAt(0, magic);
             if (magic.SequenceEqual("HM3W"u8))
                 begin = 0;
         }
@@ -116,14 +128,15 @@ public sealed partial class MpqArchive
     /// Hashes [<paramref name="begin"/>, <paramref name="end"/>) with [<paramref name="excludeBegin"/>,
     /// <paramref name="excludeEnd"/>) read as zero, then appends one tail per hash.
     /// </summary>
-    private byte[][] HashRange(long begin, long end, long excludeBegin, long excludeEnd, byte[][] tails, params HashAlgorithm[] hashes)
+    private static byte[][] HashRange(Stream stream, long begin, long end, long excludeBegin, long excludeEnd, byte[][] tails,
+        params HashAlgorithm[] hashes)
     {
         var buffer = new byte[DigestUnitSize];
         for (long position = begin; position < end;)
         {
             int count = (int)Math.Min(DigestUnitSize, end - position);
             var chunk = buffer.AsSpan(0, count);
-            _stream.ReadExactlyAt(position, chunk);
+            stream.ReadExactlyAt(position, chunk);
             long zeroBegin = Math.Max(excludeBegin, position), zeroEnd = Math.Min(excludeEnd, position + count);
             if (zeroBegin < zeroEnd)
                 chunk[(int)(zeroBegin - position)..(int)(zeroEnd - position)].Clear();

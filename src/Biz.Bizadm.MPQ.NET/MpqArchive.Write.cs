@@ -14,6 +14,8 @@ public sealed partial class MpqArchive
     private const MpqFileFlags DefaultInternalFlags = (MpqFileFlags)0xFFFFFFFF;
 
     private bool _dirty;
+    // End of the archive on disk that the current header describes (relative to the header); new data goes after it.
+    private long _committedEnd;
     private bool _created;
     private bool _internalFilesInvalidated;
 
@@ -24,6 +26,7 @@ public sealed partial class MpqArchive
     private MpqFileFlags? _signatureFlags;
     private MpqAttributeFlags _attributeFlags = MpqAttributeFlags.Crc32 | MpqAttributeFlags.FileTime | MpqAttributeFlags.Md5;
 
+    /// <summary>Creates a new archive file; an existing file at <paramref name="path"/> is replaced.</summary>
     public static MpqArchive Create(string path, MpqArchiveCreateOptions? options = null)
     {
         var stream = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
@@ -89,6 +92,12 @@ public sealed partial class MpqArchive
     /// Adds <paramref name="content"/> (read to its end) as <paramref name="fileName"/>. The name is stored as given.
     /// Changes are written by <see cref="Flush"/> or dispose.
     /// </summary>
+    /// <remarks>
+    /// Data is written after the archive as it is on disk, and the header is written last by <see cref="Flush"/>; until
+    /// then the archive on disk stays readable in its previous state. The space of the previous tables is reclaimed by
+    /// <see cref="Compact"/>.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The name is internal, contains a line break or NUL, or is a StormLib pseudo name.</exception>
     /// <exception cref="InvalidOperationException">The file exists and <see cref="MpqAddFileOptions.Overwrite"/> is false, or the hash table is full.</exception>
     public void AddFile(string fileName, Stream content, MpqAddFileOptions? options = null)
     {
@@ -98,6 +107,7 @@ public sealed partial class MpqArchive
         EnsureWritable();
         if (ListFile.IsInternalName(fileName))
             throw new ArgumentException($"{fileName} is maintained by the archive.", nameof(fileName));
+        ListFile.ValidateNewName(fileName, nameof(fileName));
 
         options ??= MpqAddFileOptions.Default;
         using var buffer = new MemoryStream();
@@ -166,9 +176,9 @@ public sealed partial class MpqArchive
             }
 
             _table.RebuildHet();
-            WriteTablesAndHeader();
+            WriteTablesAndHeader(_stream);
             if (_signatureFlags is not null)
-                FinishWeakSignature();
+                FinishWeakSignature(_stream);
             _dirty = false;
             _internalFilesInvalidated = false;
         }
@@ -314,15 +324,18 @@ public sealed partial class MpqArchive
             if (entry.FilePosition + entry.CompressedSize > end)
                 end = DataEnd(entry);
         }
-        // Data of deleted or replaced files that open streams still read is not overwritten.
-        return Math.Max(end, _openStreamDataEnd);
+        // Data of deleted or replaced files that open streams still read is not overwritten, and neither is the archive
+        // on disk (its tables): until the header is rewritten by Flush it must stay readable. Not in StormLib, which
+        // writes over the old tables, so an interrupted change loses the whole archive.
+        return Math.Max(Math.Max(end, _openStreamDataEnd), _committedEnd);
     }
 
     /// <summary>End of the stored data of <paramref name="entry"/>, including its raw chunk MD5s (v4).</summary>
     private long DataEnd(MpqFileEntry entry) =>
         entry.FilePosition + entry.CompressedSize + RawChunkMd5Size(entry.CompressedSize);
 
-    private void WriteTablesAndHeader()
+    /// <summary>Writes the tables after the data and then the header (last, so an interrupted write keeps the old header).</summary>
+    private void WriteTablesAndHeader(Stream target)
     {
         long position = FindFreeSpace(includeInternalFiles: true);
 
@@ -336,9 +349,9 @@ public sealed partial class MpqArchive
             // StormLib SaveExtTable: raw chunk MD5s follow each table (WriteMemDataMD5).
             hetPosition = position;
             betPosition = hetPosition + hetTable.Length + RawChunkMd5Size(hetTable.Length);
-            _stream.Position = _headerOffset + hetPosition;
-            WriteWithChunkMd5s(hetTable);
-            WriteWithChunkMd5s(betTable);
+            target.Position = _headerOffset + hetPosition;
+            WriteWithChunkMd5s(target, hetTable);
+            WriteWithChunkMd5s(target, betTable);
             position = betPosition + betTable.Length + RawChunkMd5Size(betTable.Length);
         }
         long tablePosition = position;
@@ -389,11 +402,11 @@ public sealed partial class MpqArchive
             V4 = v4,
         };
 
-        _stream.Position = _headerOffset + tablePosition;
-        _stream.Write(hash);
-        _stream.Write(block);
+        target.Position = _headerOffset + tablePosition;
+        target.Write(hash);
+        target.Write(block);
         if (hiBlock is not null)
-            _stream.Write(hiBlock);
+            target.Write(hiBlock);
 
         Span<byte> header = stackalloc byte[(int)headerSize];
         BinaryPrimitives.WriteUInt32LittleEndian(header, MpqHeaderReader.HeaderSignature);
@@ -434,11 +447,14 @@ public sealed partial class MpqArchive
             headerMd5.CopyTo(header[0xC0..]);
             Header = Header with { V4 = v4 with { Md5MpqHeader = headerMd5 } };
         }
-        _stream.Position = _headerOffset;
-        _stream.Write(header);
+        target.Position = _headerOffset;
+        target.Write(header);
+        // From here the archive on disk is the new one, even if what follows fails.
+        if (target == _stream)
+            _committedEnd = archiveSize;
 
-        _stream.SetLength(_headerOffset + archiveSize);
-        _stream.Flush();
+        target.SetLength(_headerOffset + archiveSize);
+        target.Flush();
     }
 
     private static uint HeaderSize(MpqFormatVersion version) => (uint)(version switch
@@ -478,11 +494,11 @@ public sealed partial class MpqArchive
     }
 
     /// <summary>Writes <paramref name="data"/> at the current position, followed by its raw chunk MD5s (v4).</summary>
-    private void WriteWithChunkMd5s(byte[] data)
+    private void WriteWithChunkMd5s(Stream target, byte[] data)
     {
-        _stream.Write(data);
+        target.Write(data);
         if (RawChunkSize != 0)
-            _stream.Write(ChunkMd5s(data, RawChunkSize));
+            target.Write(ChunkMd5s(data, RawChunkSize));
     }
 
     /// <summary>StormLib SaveExtTable without compression: the extended header and the encrypted table.</summary>

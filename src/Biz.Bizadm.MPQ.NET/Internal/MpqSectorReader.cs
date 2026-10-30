@@ -27,10 +27,16 @@ internal sealed class MpqSectorReader
     private readonly uint _singleUnitSize;
     private uint[]? _sectorOffsets;
 
+    private readonly int _maxBufferSize;
+
     /// <param name="headerOffset">Absolute position of the MPQ header.</param>
     /// <param name="fileKey">File key from <see cref="StormCrypto.GetFileKey"/>; required for encrypted files.</param>
-    public MpqSectorReader(Stream stream, long headerOffset, MpqFileEntry entry, MpqFormatVersion version, int sectorSize, uint fileKey)
+    /// <param name="maxBufferSize">Largest whole-file buffer (single-unit files, <see cref="ReadAll"/>).</param>
+    /// <exception cref="InvalidDataException">A single-unit file is larger than <paramref name="maxBufferSize"/>.</exception>
+    public MpqSectorReader(Stream stream, long headerOffset, MpqFileEntry entry, MpqFormatVersion version, int sectorSize, uint fileKey,
+        int maxBufferSize = DefaultMaxBufferSize)
     {
+        _maxBufferSize = maxBufferSize;
         _stream = stream;
         _rawPosition = MpqHeaderReader.FileOffset(version, headerOffset, entry.FilePosition);
         _entry = entry;
@@ -54,6 +60,9 @@ internal sealed class MpqSectorReader
         }
 
         bool singleUnit = entry.Flags.HasFlag(MpqFileFlags.SingleUnit);
+        // A single-unit file is one buffer of the whole file; its size comes from the archive.
+        if (singleUnit)
+            EnsureBufferSize(_dataSize);
         SectorSize = singleUnit ? (int)_dataSize : sectorSize;
         SectorCount = _dataSize == 0 ? 0 : singleUnit ? 1 : (int)((_dataSize - 1) / (uint)sectorSize) + 1;
     }
@@ -112,12 +121,22 @@ internal sealed class MpqSectorReader
         return length;
     }
 
+    /// <exception cref="InvalidDataException">The file is larger than the maximum buffer size.</exception>
     public byte[] ReadAll()
     {
+        EnsureBufferSize(_dataSize);
         var result = new byte[_dataSize];
         for (int i = 0; i < SectorCount; i++)
-            ReadSector(i, result.AsSpan(i * SectorSize));
+            ReadSector(i, result.AsSpan((int)((long)i * SectorSize)));
         return result;
+    }
+
+    public const int DefaultMaxBufferSize = 512 * 1024 * 1024;
+
+    private void EnsureBufferSize(long size)
+    {
+        if (size > _maxBufferSize)
+            throw new InvalidDataException($"The file size {size} exceeds the maximum buffer size {_maxBufferSize}.");
     }
 
     private void ReadSingleUnit(Span<byte> output)
@@ -161,9 +180,10 @@ internal sealed class MpqSectorReader
     private uint[] ReadSectorOffsets()
     {
         int count = SectorCount + 1;
-        var offsets = new uint[count];
+        // Checked before allocating: the sector count comes from the file size in the archive.
         if (SectorPosition(0) > _stream.Length - count * 4L)
             throw new InvalidDataException("File data lies outside the archive.");
+        var offsets = new uint[count];
         _stream.ReadExactlyAt(SectorPosition(0), MemoryMarshal.AsBytes(offsets.AsSpan()));
         if (IsEncrypted)
             StormCrypto.DecryptBlock(offsets, RequireKey() - 1);

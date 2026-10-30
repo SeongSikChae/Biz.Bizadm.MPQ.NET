@@ -10,7 +10,8 @@ public sealed class MpqFileStream : Stream
 {
     private readonly MpqArchive _archive;
     private readonly MpqSectorReader _reader;
-    private readonly byte[] _sector;
+    // Allocated on the first read, so opening a stream does not allocate a sector-sized buffer.
+    private byte[]? _sector;
     private int _cachedSector = -1;
     private int _cachedLength;
     private long _position;
@@ -20,7 +21,6 @@ public sealed class MpqFileStream : Stream
     {
         _archive = archive;
         _reader = reader;
-        _sector = new byte[Math.Max(reader.SectorSize, 0)];
     }
 
     public override bool CanRead => !_disposed && !_archive.IsDisposed;
@@ -69,7 +69,7 @@ public sealed class MpqFileStream : Stream
 
             int offset = (int)(_position - (long)index * _reader.SectorSize);
             int count = Math.Min(_cachedLength - offset, buffer.Length - total);
-            _sector.AsSpan(offset, count).CopyTo(buffer[total..]);
+            _sector!.AsSpan(offset, count).CopyTo(buffer[total..]);
             total += count;
             _position += count;
         }
@@ -119,6 +119,7 @@ public sealed class MpqFileStream : Stream
 
     private void LoadSector(int index)
     {
+        _sector ??= new byte[_reader.SectorSize];
         lock (_archive.SyncRoot)
         {
             _archive.ThrowIfDisposed();

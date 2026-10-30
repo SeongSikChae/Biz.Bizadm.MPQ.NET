@@ -10,7 +10,15 @@ internal static class MpqTableReader
     public const uint HetSignature = 0x1A544548; // "HET\x1A"
     public const uint BetSignature = 0x1A544542; // "BET\x1A"
     private const int ExtHeaderSize = 12;
-    private const long MaxZeroFill = 0x10000000;
+
+    /// <summary>
+    /// Largest hash or block table, in entries. StormLib accepts any size; real archives have at most 0x80000
+    /// (HASH_TABLE_SIZE_MAX) and protectors such as Spazzler use 0x100000.
+    /// </summary>
+    public const int MaxTableEntries = 0x100000;
+
+    // Largest decoded HET or BET table (a BET table of MaxTableEntries entries is far smaller).
+    private const int MaxExtTableSize = 0x4000000;
 
     /// <summary>
     /// Loads a hash or block table of <paramref name="tableSize"/> bytes stored in <paramref name="storedSize"/> bytes
@@ -25,7 +33,8 @@ internal static class MpqTableReader
         ReadOnlyMemory<byte> md5, bool strict, string tableName, out bool cut)
     {
         cut = false;
-        if (tableSize > Array.MaxLength)
+        // The size comes from the header and is allocated (zero-filled or decompressed) whatever the file holds.
+        if (tableSize > MaxTableEntries * 16L)
             throw new InvalidDataException($"The {tableName} is too large.");
 
         bool compressed = storedSize > 0 && storedSize < tableSize;
@@ -34,9 +43,6 @@ internal static class MpqTableReader
             return null;
 
         long available = Math.Min(readSize, stream.Length - position);
-        // StormLib allocates whatever the header says; a cap keeps bogus sizes from allocating gigabytes of zeros.
-        if (readSize - available > MaxZeroFill)
-            throw new InvalidDataException($"The {tableName} runs too far past the end of the file.");
         var stored = new byte[readSize];
         cut = available < readSize;
         stream.ReadExactlyAt(position, stored.AsSpan(0, (int)available));
@@ -71,7 +77,8 @@ internal static class MpqTableReader
         if (BinaryPrimitives.ReadUInt32LittleEndian(stored) != signature)
             throw new InvalidDataException($"Invalid {tableName} signature.");
         uint dataSize = BinaryPrimitives.ReadUInt32LittleEndian(stored.AsSpan(8));
-        if (dataSize > Array.MaxLength)
+        // The decoded size comes from the table header and is allocated before decompressing.
+        if (dataSize > MaxExtTableSize)
             throw new InvalidDataException($"Invalid {tableName} data size.");
 
         var body = stored.AsSpan(ExtHeaderSize);

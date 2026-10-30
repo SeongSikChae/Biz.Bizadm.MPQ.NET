@@ -14,6 +14,7 @@ public sealed partial class MpqArchive : IDisposable
     private int _openFileStreams;
     // StormLib MPQ_FLAG_MALFORMED: the archive was repaired when opened, so it is read-only (MPQ_FLAG_READ_ONLY).
     private bool _malformed;
+    private int _maxBufferSize = MpqSectorReader.DefaultMaxBufferSize;
     // End of the data read by open file streams; new data is not written before it, even when the file is deleted.
     private long _openStreamDataEnd;
     private readonly long _headerOffset;
@@ -85,12 +86,18 @@ public sealed partial class MpqArchive : IDisposable
             throw new ArgumentException("The stream must be writable for ReadWrite mode.", nameof(stream));
 
         options ??= MpqOpenOptions.Default;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.MaxBufferSize, nameof(options));
         var (header, userData, headerOffset) = MpqHeaderReader.Find(stream, options.Strict);
         var table = MpqFileTable.Load(stream, header, headerOffset, options.Strict);
         bool malformed = header.Malformed || table.Malformed;
         if (malformed && options.Strict)
             throw new InvalidDataException("The archive is malformed (its header or tables had to be repaired).");
-        var archive = new MpqArchive(stream, leaveOpen, header, userData, headerOffset, table, mode) { _malformed = malformed };
+        var archive = new MpqArchive(stream, leaveOpen, header, userData, headerOffset, table, mode)
+        {
+            _malformed = malformed,
+            _maxBufferSize = options.MaxBufferSize,
+            _committedEnd = stream.Length - headerOffset,
+        };
         archive.LoadInternalFiles(options);
         return archive;
     }
@@ -99,12 +106,18 @@ public sealed partial class MpqArchive : IDisposable
     /// Names files from <paramref name="fileNames"/> (StormLib SFileAddListFile); names already known are kept.
     /// The names appear in <see cref="Entries"/>.
     /// </summary>
+    /// <exception cref="InvalidDataException">
+    /// The archive's hash tables make the lookups too slow (a table without free slots); names applied so far are kept.
+    /// </exception>
     public void AddListFile(IEnumerable<string> fileNames)
     {
         ArgumentNullException.ThrowIfNull(fileNames);
         ThrowIfDisposed();
+        long start = _table.ProbeSteps;
         foreach (string name in fileNames)
         {
+            if (_table.ProbeSteps - start > MpqFileTable.MaxNameProbeSteps)
+                throw new InvalidDataException("Applying the file names takes too many hash table lookups.");
             if (!string.IsNullOrEmpty(name))
                 _table.AssignName(name);
         }
@@ -125,10 +138,17 @@ public sealed partial class MpqArchive : IDisposable
         _signatureFlags = FindExisting(ListFile.SignatureName)?.Flags;
 
         byte[]? listFile = ReadInternalFile(ListFile.ListFileName, ListFile.MaxSize, options.Strict);
-        if (listFile is not null)
-            AddListFile(ListFile.Parse(listFile));
-        if (options.ExternalListFile is not null)
-            AddListFile(options.ExternalListFile);
+        try
+        {
+            if (listFile is not null)
+                AddListFile(ListFile.Parse(listFile));
+            if (options.ExternalListFile is not null)
+                AddListFile(options.ExternalListFile);
+        }
+        catch (InvalidDataException) when (!options.Strict)
+        {
+            // Names that take too long to apply are skipped, like an unreadable (listfile).
+        }
 
         // StormLib sizes (attributes) by the header's block table size; without a block table it is not applied.
         int blockTableSize = (int)Math.Min(Header.BlockTableSize, (uint)_table.Entries.Count);
@@ -171,7 +191,7 @@ public sealed partial class MpqArchive : IDisposable
         uint key = snapshot.Flags.HasFlag(MpqFileFlags.Encrypted)
             ? StormCrypto.GetFileKey(fileName, snapshot.FilePosition, snapshot.FileSize, snapshot.Flags.HasFlag(MpqFileFlags.FixKey))
             : 0;
-        return new MpqSectorReader(_stream, _headerOffset, snapshot, Header.FormatVersion, Header.SectorSize, key);
+        return new MpqSectorReader(_stream, _headerOffset, snapshot, Header.FormatVersion, Header.SectorSize, key, _maxBufferSize);
     }
 
     /// <summary>

@@ -32,6 +32,9 @@ internal sealed class HetTable
     public ulong AndMask { get; }
     public ulong OrMask { get; }
 
+    /// <summary>Probe steps done by <see cref="FindIndex"/> (see <see cref="MpqFileTable.ProbeSteps"/>).</summary>
+    public long ProbeSteps { get; private set; }
+
     public static HetTable Parse(ReadOnlySpan<byte> data)
     {
         if (data.Length < HeaderSize)
@@ -117,6 +120,47 @@ internal sealed class HetTable
         if (EntryCount == 0 || TotalCount == 0)
             return null;
 
+        // The probe visits start, start+1, ... (wrapping) up to the first free slot and returns the first slot whose name
+        // hash byte matches and whose entry has the full name hash. The index gives the same answer without walking a
+        // crafted table that has no free slots.
+        ProbeSteps++;
+        if (_slotsByHash is null)
+            BuildIndex(entries);
+
+        byte nameHash1 = (byte)(fileNameHash >> (NameHashBitSize - 8));
+        int start = (int)(fileNameHash % (ulong)TotalCount);
+        int next = Array.BinarySearch(_freeSlots!, start);
+        if (next < 0)
+            next = ~next;
+        long freeDistance = next < _freeSlots!.Length ? _freeSlots[next] - start
+            : _freeSlots.Length != 0 ? _freeSlots[0] + (long)TotalCount - start
+            : TotalCount;
+
+        if (!_slotsByHash!.TryGetValue(fileNameHash, out var slots))
+            return null;
+        int? result = null;
+        long resultDistance = long.MaxValue;
+        foreach (int slot in slots)
+        {
+            long distance = (slot - start + (long)TotalCount) % TotalCount;
+            if (distance >= freeDistance || distance >= resultDistance || _nameHashes[slot] != nameHash1)
+                continue;
+            ulong fileIndex = MpqBitArray.GetBits(_indexBits, (long)IndexSizeTotal * slot, IndexSize);
+            if (fileIndex < (ulong)entries.Count && entries[(int)fileIndex].NameHash == fileNameHash)
+            {
+                result = (int)fileIndex;
+                resultDistance = distance;
+            }
+        }
+        return result;
+    }
+
+    /// <summary>StormLib GetFileIndex_Het by walking the probe chain (the reference for the index).</summary>
+    internal int? ProbeIndex(ulong fileNameHash, IReadOnlyList<MpqFileEntry> entries)
+    {
+        if (EntryCount == 0 || TotalCount == 0)
+            return null;
+
         byte nameHash1 = (byte)(fileNameHash >> (NameHashBitSize - 8));
         int start = (int)(fileNameHash % (ulong)TotalCount);
         int index = start;
@@ -134,6 +178,36 @@ internal sealed class HetTable
                 break;
         }
         return null;
+    }
+
+    // Occupied slots by the name hash of the entry they point to, and the free slots in order.
+    private Dictionary<ulong, List<int>>? _slotsByHash;
+    private int[]? _freeSlots;
+
+    /// <summary>Must be called when the entries the slots point to change (their order or name hashes).</summary>
+    public void InvalidateIndex() => _slotsByHash = null;
+
+    private void BuildIndex(IReadOnlyList<MpqFileEntry> entries)
+    {
+        var slotsByHash = new Dictionary<ulong, List<int>>();
+        var free = new List<int>();
+        for (int i = 0; i < TotalCount; i++)
+        {
+            if (_nameHashes[i] == FreeEntry)
+            {
+                free.Add(i);
+                continue;
+            }
+            ulong fileIndex = MpqBitArray.GetBits(_indexBits, (long)IndexSizeTotal * i, IndexSize);
+            if (fileIndex >= (ulong)entries.Count)
+                continue;
+            ulong hash = entries[(int)fileIndex].NameHash;
+            if (!slotsByHash.TryGetValue(hash, out var slots))
+                slotsByHash[hash] = slots = [];
+            slots.Add(i);
+        }
+        _freeSlots = [.. free];
+        _slotsByHash = slotsByHash;
     }
 }
 

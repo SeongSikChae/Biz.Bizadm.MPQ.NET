@@ -89,8 +89,8 @@ internal sealed class MpqFileTable
             betData = MpqTableReader.LoadExtTable(stream, headerOffset + header.BetTablePosition, layout.BetTableSize,
                 MpqTableReader.BetSignature, StormCrypto.BlockTableKey, v4?.Md5BetTable ?? default, strict, "BET table");
             betCount = BetTable.ReadEntryCount(betData);
-            // Every BET entry takes at least one bit, which bounds the allocation below.
-            if (betCount > betData.LongLength * 8)
+            // Every BET entry takes at least one bit; the count also has the same limit as the block table.
+            if (betCount > betData.LongLength * 8 || betCount > MpqTableReader.MaxTableEntries)
                 throw new InvalidDataException("Invalid BET entry count.");
         }
 
@@ -118,14 +118,19 @@ internal sealed class MpqFileTable
 
         if (blockData is not null)
         {
-            var blocks = new MpqFileEntry[blockCount];
-            for (int i = 0; i < blocks.Length; i++)
-                blocks[i] = new MpqFileEntry();
-            BlockTableSerializer.Parse(blockData, blocks);
-            BuildFromBlockTable(hash, blocks, entries, header, headerOffset, stream.Length, malformed, cut);
+            BuildFromBlockTable(hash, blockData, entries, header, headerOffset, stream.Length, malformed, cut);
             if (header.FormatVersion >= MpqFormatVersion.Version2 && header.HiBlockTablePosition != 0)
                 BlockTableSerializer.ApplyHiBlockTable(stream, headerOffset + header.HiBlockTablePosition, entries, blockCount,
                     v4?.Md5HiBlockTable ?? default, strict);
+        }
+
+        // Not in StormLib: data outside the file (e.g. a forged hi-block table) would make writes and Compact use bogus
+        // positions and sizes, so such archives are read-only.
+        foreach (var entry in entries)
+        {
+            if (entry.Flags.HasFlag(MpqFileFlags.Exists)
+                && MpqHeaderReader.FileOffset(header.FormatVersion, headerOffset, entry.FilePosition) + entry.CompressedSize > stream.Length)
+                malformed = true;
         }
 
         return new MpqFileTable(hash, entries, het) { Malformed = malformed };
@@ -139,17 +144,18 @@ internal sealed class MpqFileTable
     /// (IsValidHashEntry1: index within the block table, MPQ_FILE_EXISTS, below 2 GB in malformed archives, and data
     /// starting inside the file). When a table was cut, block indexes are renumbered in hash table order.
     /// </summary>
-    private static void BuildFromBlockTable(MpqHashEntry[] hash, MpqFileEntry[] blocks, MpqFileEntry[] entries, MpqHeader header,
+    private static void BuildFromBlockTable(MpqHashEntry[] hash, byte[] blockData, MpqFileEntry[] entries, MpqHeader header,
         long headerOffset, long fileSize, bool malformed, bool cut)
     {
-        int[]? remap = cut ? Enumerable.Repeat(-1, blocks.Length).ToArray() : null;
+        int blockCount = blockData.Length / BlockTableSerializer.EntrySize;
+        int[]? remap = cut ? Enumerable.Repeat(-1, blockCount).ToArray() : null;
         int itemCount = 0;
         for (int i = 0; i < hash.Length; i++)
         {
             uint index = hash[i].BlockIndex & MpqHashEntry.BlockIndexMask;
-            if (index >= blocks.Length)
+            if (index >= blockCount)
                 continue;
-            var block = blocks[index];
+            var block = BlockTableSerializer.ParseEntry(blockData, (int)index);
             if (!block.Flags.HasFlag(MpqFileFlags.Exists)
                 || malformed && block.FileSize >= 0x80000000
                 || MpqHeaderReader.FileOffset(header.FormatVersion, headerOffset, block.FilePosition) >= fileSize)
@@ -208,8 +214,11 @@ internal sealed class MpqFileTable
                 {
                     match.FileName = candidate;
                     // StormLib AllocateFileName: with a HET table the name hash is recomputed from the name.
-                    if (_het is not null)
-                        match.NameHash = _het.HashName(candidate);
+                    if (_het is not null && _het.HashName(candidate) is var nameHash && nameHash != match.NameHash)
+                    {
+                        match.NameHash = nameHash;
+                        _het.InvalidateIndex();
+                    }
                     assigned = true;
                 }
             }
@@ -277,11 +286,21 @@ internal sealed class MpqFileTable
         uint start = StormCrypto.HashStringSlash(name, MpqHashType.TableOffset) & mask;
         uint a = StormCrypto.HashStringSlash(name, MpqHashType.NameA);
         uint b = StormCrypto.HashStringSlash(name, MpqHashType.NameB);
-        int best = -1;
+        // Hash table sizes that are not a power of two (protectors) probe a subset of the table; walk it.
+        return (_hash.Length & mask) == 0
+            ? FindSlotIndexed(start, a, b, locale, platform)
+            : ProbeSlot(start, a, b, locale, platform);
+    }
 
+    /// <summary>StormLib GetHashEntryLocale by walking the probe chain (also the reference for the index).</summary>
+    internal int ProbeSlot(uint start, uint a, uint b, ushort locale, byte platform)
+    {
+        uint mask = (uint)_hash.Length - 1;
+        int best = -1;
         uint i = start;
         do
         {
+            _probeSteps++;
             ref readonly var slot = ref _hash[i];
             if (slot.BlockIndex == MpqHashEntry.Free)
                 break;
@@ -300,6 +319,83 @@ internal sealed class MpqFileTable
         while (i != start);
 
         return best;
+    }
+
+    // Index of a power-of-two hash table: slots by name pair, and the free slots that end a probe. Kept up to date by
+    // SetHashEntry once built.
+    private Dictionary<(uint, uint), List<int>>? _slotsByPair;
+    private SortedSet<int>? _freeSlots;
+
+    /// <summary>
+    /// The same result as walking the probe chain from <paramref name="start"/>, without walking it: the chain visits
+    /// slots in order (start, start+1, ... wrapping) up to the first free slot, so a slot is reached when it comes before
+    /// that free slot. A crafted table without free slots would otherwise make every lookup visit the whole table.
+    /// </summary>
+    internal int FindSlotIndexed(uint start, uint a, uint b, ushort locale, byte platform)
+    {
+        _probeSteps++;
+        if (_slotsByPair is null)
+        {
+            _slotsByPair = [];
+            _freeSlots = [];
+            for (int i = 0; i < _hash.Length; i++)
+                AddToIndex(i, _hash[i]);
+        }
+        if (!_slotsByPair.TryGetValue((a, b), out var slots))
+            return -1;
+
+        uint mask = (uint)_hash.Length - 1;
+        long freeDistance = _hash.Length;
+        foreach (int free in _freeSlots!.GetViewBetween((int)start, _hash.Length - 1))
+        {
+            freeDistance = free - start;
+            break;
+        }
+        if (freeDistance == _hash.Length && _freeSlots.Count != 0)
+            freeDistance = _freeSlots.Min + _hash.Length - start;
+
+        int best = -1;
+        long bestDistance = -1;
+        foreach (int i in slots.OrderBy(s => (s - start) & mask))
+        {
+            long distance = (i - start) & mask;
+            if (distance >= freeDistance)
+                break;
+            var slot = _hash[i];
+            if ((slot.BlockIndex & MpqHashEntry.BlockIndexMask) >= _entries.Count)
+                continue;
+            if ((locale != 0 || platform != 0) && slot.Locale == locale && slot.Platform == platform)
+                return i;
+            if ((slot.Locale == 0 || slot.Locale == locale) && (slot.Platform == 0 || slot.Platform == platform) && distance > bestDistance)
+            {
+                best = i;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    private void SetHashEntry(int index, MpqHashEntry value)
+    {
+        if (_slotsByPair is not null)
+        {
+            var old = _hash[index];
+            if (_slotsByPair.TryGetValue((old.HashA, old.HashB), out var slots))
+                slots.Remove(index);
+            if (old.BlockIndex == MpqHashEntry.Free)
+                _freeSlots!.Remove(index);
+            AddToIndex(index, value);
+        }
+        _hash[index] = value;
+    }
+
+    private void AddToIndex(int index, MpqHashEntry slot)
+    {
+        if (slot.BlockIndex == MpqHashEntry.Free)
+            _freeSlots!.Add(index);
+        if (!_slotsByPair!.TryGetValue((slot.HashA, slot.HashB), out var slots))
+            _slotsByPair[(slot.HashA, slot.HashB)] = slots = [];
+        slots.Add(index);
     }
 
     /// <summary>
@@ -327,7 +423,7 @@ internal sealed class MpqFileTable
     {
         var old = _hash[slotIndex];
         int blockIndex = (int)(old.BlockIndex & MpqHashEntry.BlockIndexMask);
-        _hash[slotIndex] = new MpqHashEntry(MpqHashEntry.Free, MpqHashEntry.Free, 0xFFFF, 0xFF, 0xFF, MpqHashEntry.Deleted);
+        SetHashEntry(slotIndex, new MpqHashEntry(MpqHashEntry.Free, MpqHashEntry.Free, 0xFFFF, 0xFF, 0xFF, MpqHashEntry.Deleted));
 
         var entry = _entries[blockIndex];
         entry.FileName = newName;
@@ -337,6 +433,17 @@ internal sealed class MpqFileTable
         int slot = FindFreeSlot(newName, old.Locale);
         SetSlot(slot, newName, old.Locale, blockIndex, old.Platform);
     }
+
+    /// <summary>
+    /// Limit for the hash and HET probe steps of one list of names (<see cref="ProbeSteps"/>). Real archives need a few
+    /// steps per name; a crafted table without free slots needs the whole table per name, so many names take quadratic time.
+    /// </summary>
+    public const long MaxNameProbeSteps = 100_000_000;
+
+    private long _probeSteps;
+
+    /// <summary>Hash and HET probe steps done so far (lookups by name).</summary>
+    public long ProbeSteps => _probeSteps + (_het?.ProbeSteps ?? 0);
 
     // ---- Modification ----
 
@@ -397,6 +504,7 @@ internal sealed class MpqFileTable
     public int AddEntry(MpqFileEntry entry)
     {
         _slotsByName = null;
+        _het?.InvalidateIndex();
         int free = _entries.FindIndex(e => !e.Flags.HasFlag(MpqFileFlags.Exists));
         if (free >= 0)
         {
@@ -415,6 +523,7 @@ internal sealed class MpqFileTable
     /// </summary>
     public void Defragment()
     {
+        _het?.InvalidateIndex();
         var map = new int[_entries.Count];
         var kept = new List<MpqFileEntry>(_entries.Count);
         for (int i = 0; i < _entries.Count; i++)
@@ -437,7 +546,7 @@ internal sealed class MpqFileTable
             var slot = _hash[i];
             uint blockIndex = slot.BlockIndex & MpqHashEntry.BlockIndexMask;
             if (blockIndex < _entries.Count)
-                _hash[i] = slot with { BlockIndex = map[blockIndex] >= 0 ? (uint)map[blockIndex] : MpqHashEntry.Deleted };
+                SetHashEntry(i, slot with { BlockIndex = map[blockIndex] >= 0 ? (uint)map[blockIndex] : MpqHashEntry.Deleted });
         }
         _entries.Clear();
         _entries.AddRange(kept);
@@ -452,7 +561,7 @@ internal sealed class MpqFileTable
         entry.HashB = StormCrypto.HashStringSlash(name, MpqHashType.NameB);
         entry.Locale = locale;
         entry.Platform = platform;
-        _hash[slotIndex] = new MpqHashEntry(entry.HashA, entry.HashB, locale, platform, 0, (uint)blockIndex);
+        SetHashEntry(slotIndex, new MpqHashEntry(entry.HashA, entry.HashB, locale, platform, 0, (uint)blockIndex));
         _slotsByName = null;
     }
 
@@ -470,7 +579,7 @@ internal sealed class MpqFileTable
             entry.FileName = null;
             entry.NameHash = 0;
         }
-        _hash[slotIndex] = new MpqHashEntry(MpqHashEntry.Free, MpqHashEntry.Free, 0xFFFF, 0xFF, 0xFF, MpqHashEntry.Deleted);
+        SetHashEntry(slotIndex, new MpqHashEntry(MpqHashEntry.Free, MpqHashEntry.Free, 0xFFFF, 0xFF, 0xFF, MpqHashEntry.Deleted));
         _slotsByName = null;
     }
 

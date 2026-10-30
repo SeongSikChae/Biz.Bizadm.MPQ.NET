@@ -14,7 +14,7 @@ internal static class BZip2Codec
                 decompressConcatenated: false, leaveOpen: false, tolerateTruncatedStream: false);
             return bzip2.ReadAtLeast(output, output.Length, throwOnEndOfStream: false);
         }
-        catch (Exception ex) when (ex is not InvalidDataException)
+        catch (Exception ex) when (ex is not (InvalidDataException or OutOfMemoryException))
         {
             throw new InvalidDataException("Corrupt bzip2 data.", ex);
         }

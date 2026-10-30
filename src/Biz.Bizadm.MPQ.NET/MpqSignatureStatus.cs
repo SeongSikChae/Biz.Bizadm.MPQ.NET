@@ -6,7 +6,10 @@ public enum MpqSignatureStatus
     /// <summary>The archive has no signature.</summary>
     None = 0,
 
-    /// <summary>The (signature) file matches the archive, or is all zero (not signed yet).</summary>
+    /// <summary>
+    /// The (signature) file matches the archive. The weak signing key is public, so this only detects damage, not
+    /// tampering.
+    /// </summary>
     WeakValid = 2,
 
     WeakInvalid = 3,
@@ -15,4 +18,10 @@ public enum MpqSignatureStatus
     StrongValid = 4,
 
     StrongInvalid = 5,
+
+    /// <summary>
+    /// The archive has a (signature) file whose signature is all zero, so nothing was checked. StormLib reports this
+    /// as a valid weak signature.
+    /// </summary>
+    WeakUnsigned = 6,
 }

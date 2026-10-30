@@ -43,7 +43,7 @@ public sealed partial class MpqArchive
         if (Mode != MpqOpenMode.Read)
             throw new InvalidOperationException("Patch archives can only be added to archives open for reading.");
 
-        var patch = Open(path, MpqOpenMode.Read);
+        var patch = Open(path, MpqOpenMode.Read, new MpqOpenOptions { MaxBufferSize = _maxBufferSize });
         try
         {
             patch._patchPrefix = FindPatchPrefix(patch, prefix)
@@ -100,7 +100,7 @@ public sealed partial class MpqArchive
         byte[] data = file.BaseArchive.ReadAllInChain(fileName, file.BaseEntry);
         var patchFiles = file.Patches.Select(p => p.Archive.ReadAllInChain(fileName, p.Entry)).ToList();
         uint maxFileSize = file.Patches.Select(p => p.Entry.FileSize).Append(file.BaseEntry.FileSize).Max();
-        byte[] patched = MpqPatch.ApplyChain(data, file.BaseEntry.Md5, patchFiles, maxFileSize);
+        byte[] patched = MpqPatch.ApplyChain(data, file.BaseEntry.Md5, patchFiles, maxFileSize, _maxBufferSize);
         return new MemoryStream(patched, writable: false);
     }
 
@@ -236,9 +236,15 @@ public sealed partial class MpqArchive
         string? helper = _path is null ? null : _path + "-PATCH";
         if (helper is null || !File.Exists(helper))
             return null;
-        byte[] data = File.ReadAllBytes(helper);
-        if (data.Length is < 12 or >= 260)
-            return null;
+        // The size is checked before reading (StormLib reads at most MAX_PATH bytes).
+        byte[] data;
+        using (var file = new FileStream(helper, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            if (file.Length is < 12 or >= 260)
+                return null;
+            data = new byte[file.Length];
+            file.ReadExactly(data);
+        }
 
         string text = System.Text.Encoding.Latin1.GetString(data);
         if (!text.StartsWith("PatchPrefix", StringComparison.OrdinalIgnoreCase))

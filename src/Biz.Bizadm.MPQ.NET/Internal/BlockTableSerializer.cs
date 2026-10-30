@@ -23,6 +23,16 @@ internal static class BlockTableSerializer
         return table;
     }
 
+    /// <summary>One decrypted block entry (StormLib TMPQBlock).</summary>
+    public readonly record struct Block(long FilePosition, uint CompressedSize, uint FileSize, MpqFileFlags Flags);
+
+    public static Block ParseEntry(ReadOnlySpan<byte> table, int index)
+    {
+        var raw = table.Slice(index * EntrySize, EntrySize);
+        return new Block(BinaryPrimitives.ReadUInt32LittleEndian(raw), BinaryPrimitives.ReadUInt32LittleEndian(raw[4..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(raw[8..]), (MpqFileFlags)BinaryPrimitives.ReadUInt32LittleEndian(raw[12..]));
+    }
+
     /// <summary>Writes decrypted block entries (StormLib TMPQBlock) into the first entries of <paramref name="entries"/>.</summary>
     public static void Parse(ReadOnlySpan<byte> table, MpqFileEntry[] entries)
     {

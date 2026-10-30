@@ -61,6 +61,19 @@ internal static class ListFile
         || name.Equals(AttributesName, StringComparison.OrdinalIgnoreCase)
         || name.Equals(SignatureName, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// A name a new file can get: it must survive the (listfile) — line breaks would split it and NUL ends it — and must
+    /// not be a StormLib pseudo name, which the (listfile) leaves out.
+    /// </summary>
+    /// <exception cref="ArgumentException">The name cannot be stored.</exception>
+    public static void ValidateNewName(string name, string paramName)
+    {
+        if (name.AsSpan().IndexOfAny('\r', '\n', '\0') >= 0)
+            throw new ArgumentException("File names cannot contain line breaks or NUL characters.", paramName);
+        if (IsPseudoName(name))
+            throw new ArgumentException($"'{name}' has the form of a StormLib pseudo name (File########.ext).", paramName);
+    }
+
     /// <summary>StormLib IsPseudoFileName: "File########.ext".</summary>
     public static bool IsPseudoName(string name) =>
         name.Length >= 13

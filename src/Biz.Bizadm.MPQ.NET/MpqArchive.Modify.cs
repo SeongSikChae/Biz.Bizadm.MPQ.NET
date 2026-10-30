@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Biz.Bizadm.MPQ.NET.Internal;
 
 namespace Biz.Bizadm.MPQ.NET;
@@ -41,6 +42,7 @@ public sealed partial class MpqArchive
         EnsureWritable();
         if (ListFile.IsInternalName(fileName) || ListFile.IsInternalName(newName))
             throw new ArgumentException("Internal files cannot be renamed.");
+        ListFile.ValidateNewName(newName, nameof(newName));
 
         lock (SyncRoot)
         {
@@ -63,9 +65,14 @@ public sealed partial class MpqArchive
     /// <summary>
     /// Rewrites the archive without the space of deleted and replaced files (StormLib SFileCompactArchive): pending
     /// changes are flushed, files are copied in file table order right after the header, and the tables are written.
-    /// An archive opened from a path is rebuilt in a temporary file that then replaces it; otherwise the stream is
-    /// overwritten. Data before the archive (and user data) is kept.
+    /// Data before the archive (and user data) is kept.
     /// </summary>
+    /// <remarks>
+    /// The complete new archive is built in a new temporary file with a random name. An archive opened from a path is
+    /// then replaced by it with <see cref="File.Replace(string, string, string?)"/>, so a failure leaves either the old
+    /// or the new archive. An archive opened from a stream is overwritten with it; if that fails, the stream is
+    /// damaged and the exception names the temporary file, which then holds the complete archive.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">A file stream is open, or a file name is unknown (see <see cref="AddListFile"/>).</exception>
     public void Compact()
     {
@@ -90,68 +97,103 @@ public sealed partial class MpqArchive
                 Flush();
             }
 
-            // The temporary file is next to the archive, or in the temp folder for archives opened from a stream.
-            string tempPath = _path is null ? Path.GetTempFileName() : _path + ".tmp";
-            long[] positions;
-            using (var temp = new FileStream(tempPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
+            // The whole compacted archive (data, tables, header, signature) is built in a new file with a random name
+            // (CreateNew never follows or reuses an existing file), next to the archive or in the temp folder.
+            string directory = _path is null ? Path.GetTempPath() : Path.GetDirectoryName(_path)!;
+            string tempPath = Path.Combine(directory, $"{Path.GetFileName(_path) ?? "mpq"}.{Path.GetRandomFileName()}.tmp");
+            var oldHeader = Header;
+            var oldPositions = _table.Entries.Select(e => e.FilePosition).ToArray();
+            long oldCommittedEnd = _committedEnd;
+            bool created = false, replaced = false;
+            try
             {
-                try
+                using (var temp = new FileStream(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
                 {
-                    positions = CopyFilesTo(temp);
-                }
-                catch
-                {
-                    temp.Dispose();
-                    File.Delete(tempPath);
-                    throw;
+                    created = true;
+                    long[] positions = CopyFilesTo(temp);
+                    for (int i = 0; i < positions.Length; i++)
+                        _table.Entries[i].FilePosition = positions[i];
+                    _table.RebuildHet();
+                    // Nothing in the new file needs protecting, so the tables follow the copied data directly.
+                    _committedEnd = 0;
+                    WriteTablesAndHeader(temp);
+                    // StormLib flushes the compacted archive, which signs it again (SSignFileFinish).
+                    if (_signatureFlags is not null)
+                        FinishWeakSignature(temp);
+                    temp.Flush(flushToDisk: true);
+
+                    if (_path is null)
+                    {
+                        try
+                        {
+                            temp.Position = 0;
+                            _stream.Position = 0;
+                            temp.CopyTo(_stream);
+                            _stream.SetLength(temp.Length);
+                            _stream.Flush();
+                            replaced = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            // The stream is partly overwritten; the complete copy is kept for recovery.
+                            replaced = true;
+                            throw new IOException($"Compacting failed while overwriting the stream; the compacted archive is in '{tempPath}'.", ex);
+                        }
+                    }
                 }
 
-                if (_path is null)
+                if (_path is not null)
                 {
+                    _stream.Dispose();
                     try
                     {
-                        temp.Position = 0;
-                        _stream.Position = 0;
-                        temp.CopyTo(_stream);
-                        _stream.SetLength(temp.Length);
+                        File.Replace(tempPath, _path, destinationBackupFileName: null);
+                        replaced = true;
                     }
-                    catch (Exception ex)
+                    finally
                     {
-                        // The stream is partly overwritten; the complete copy is kept for recovery.
-                        throw new IOException($"Compacting failed while overwriting the stream; the compacted archive is in '{tempPath}'.", ex);
+                        // The archive file is the original one when the replacement failed.
+                        _stream = new FileStream(_path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
                     }
                 }
+                else
+                {
+                    TryDelete(tempPath);
+                }
+                _committedEnd = Header.ArchiveSize;
             }
-
-            if (_path is null)
+            catch
             {
-                File.Delete(tempPath);
+                if (replaced)
+                {
+                    // The archive (or what is left of it) is the compacted one.
+                    _committedEnd = Header.ArchiveSize;
+                }
+                else
+                {
+                    // The archive is unchanged: restore the state that describes it.
+                    Header = oldHeader;
+                    for (int i = 0; i < oldPositions.Length; i++)
+                        _table.Entries[i].FilePosition = oldPositions[i];
+                    _table.RebuildHet();
+                    _committedEnd = oldCommittedEnd;
+                    if (created)
+                        TryDelete(tempPath);
+                }
+                throw;
             }
-            else
-            {
-                _stream.Dispose();
-                try
-                {
-                    File.Replace(tempPath, _path, destinationBackupFileName: null);
-                }
-                catch
-                {
-                    File.Delete(tempPath);
-                    throw;
-                }
-                finally
-                {
-                    _stream = new FileStream(_path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
-                }
-            }
+        }
+    }
 
-            for (int i = 0; i < positions.Length; i++)
-                _table.Entries[i].FilePosition = positions[i];
-            _table.RebuildHet();
-            WriteTablesAndHeader();
-            // StormLib flushes the compacted archive, which signs it again (SSignFileFinish).
-            if (_signatureFlags is not null)
-                FinishWeakSignature();
+    /// <summary>Removes a temporary file; a failure (for example a virus scanner holding it) only leaves it behind.</summary>
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
@@ -177,18 +219,43 @@ public sealed partial class MpqArchive
             if (entry.FileSize == 0)
                 continue;
 
-            byte[] stored = ReadStored(entry);
             if (entry.Flags.HasFlag(MpqFileFlags.Encrypted) && entry.Flags.HasFlag(MpqFileFlags.FixKey))
             {
+                byte[] stored = ReadStored(entry);
                 uint oldKey = StormCrypto.GetFileKey(entry.FileName!, entry.FilePosition, entry.FileSize, keyV2: true);
                 uint newKey = StormCrypto.GetFileKey(entry.FileName!, position, entry.FileSize, keyV2: true);
                 MpqSectorWriter.Recrypt(stored, entry.Flags, entry.FileSize, Header.SectorSize, oldKey, newKey);
+                target.Write(stored);
+                if (RawChunkSize != 0 && stored.Length != 0)
+                    target.Write(ChunkMd5s(stored, RawChunkSize));
             }
-            target.Write(stored);
-            if (RawChunkSize != 0 && stored.Length != 0)
-                target.Write(ChunkMd5s(stored, RawChunkSize));
+            else
+            {
+                // Copied in chunks: other files need not fit in memory.
+                CopyStored(entry, target);
+            }
         }
         return positions;
+    }
+
+    /// <summary>Copies the stored data of <paramref name="entry"/>, followed by its raw chunk MD5s (v4).</summary>
+    private void CopyStored(MpqFileEntry entry, Stream target)
+    {
+        long source = _headerOffset + entry.FilePosition;
+        int chunkSize = RawChunkSize != 0 ? (int)RawChunkSize : 0x10000;
+        var buffer = new byte[chunkSize];
+        using var md5s = new MemoryStream();
+        for (long done = 0; done < entry.CompressedSize;)
+        {
+            int count = (int)Math.Min(chunkSize, entry.CompressedSize - done);
+            _stream.ReadExactlyAt(source + done, buffer.AsSpan(0, count));
+            target.Write(buffer, 0, count);
+            if (RawChunkSize != 0)
+                md5s.Write(MD5.HashData(buffer.AsSpan(0, count)));
+            done += count;
+        }
+        md5s.Position = 0;
+        md5s.CopyTo(target);
     }
 
     /// <summary>
@@ -225,8 +292,11 @@ public sealed partial class MpqArchive
         return slot >= 0 ? slot : throw new FileNotFoundException($"'{fileName}' was not found in the archive.", fileName);
     }
 
+    /// <exception cref="InvalidDataException">The stored data is larger than the maximum buffer size.</exception>
     private byte[] ReadStored(MpqFileEntry entry)
     {
+        if (entry.CompressedSize > _maxBufferSize)
+            throw new InvalidDataException("The encrypted file is too large to re-encrypt in memory.");
         var stored = new byte[entry.CompressedSize];
         _stream.ReadExactlyAt(_headerOffset + entry.FilePosition, stored);
         return stored;

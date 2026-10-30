@@ -142,10 +142,11 @@ internal static class MpqHeaderReader
                 archiveSize = DetermineArchiveSizeV1(stream, position, archiveSize, blockTablePos, blockTableSize);
             // EWIX_v8_7.w3x: the block table size is cut to the file.
             if (blockTablePos64 + blockTableSize * 16L > fileSize)
-                blockTableSize = (uint)((fileSize - blockTablePos64) / 16);
+                blockTableSize = (uint)(Math.Max(0, fileSize - blockTablePos64) / 16);
             if (blockTablePos64 < position)
                 malformed = true;
 
+            EnsureSectorSize(sectorSizeShift);
             return new MpqHeader
             {
                 HeaderSize = headerSize,
@@ -197,7 +198,7 @@ internal static class MpqHeaderReader
         switch (version)
         {
             case MpqFormatVersion.Version2:
-                if (hiBlockTablePos > fileSize)
+                if (hiBlockTablePos < 0 || hiBlockTablePos > fileSize)
                     throw new InvalidDataException("The hi-block table lies outside the file.");
                 // The block table must follow the hash table.
                 if (blockTablePos < hashTablePos)
@@ -245,6 +246,7 @@ internal static class MpqHeaderReader
                 break;
         }
 
+        EnsureSectorSize(sectorSizeShift);
         return new MpqHeader
         {
             HeaderSize = headerSize,
@@ -261,6 +263,16 @@ internal static class MpqHeaderReader
             V4 = v4,
             Malformed = malformed,
         };
+    }
+
+    /// <summary>
+    /// Sectors of 512 &lt;&lt; 15 = 16 MB at most (the largest a writer creates). StormLib accepts any shift, which makes
+    /// sector buffers of gigabytes or an invalid size.
+    /// </summary>
+    private static void EnsureSectorSize(ushort sectorSizeShift)
+    {
+        if (sectorSizeShift > 15)
+            throw new InvalidDataException($"Unsupported sector size shift {sectorSizeShift}.");
     }
 
     /// <summary>StormLib VerifyTablePosition64.</summary>

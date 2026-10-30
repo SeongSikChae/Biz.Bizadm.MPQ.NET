@@ -39,7 +39,9 @@ internal static class MpqPatch
     /// <param name="baseMd5">MD5 of the base file from (attributes); null when unknown.</param>
     /// <param name="maxFileSize">Largest file size in the chain (StormLib Patch_InitPatcher buffer size).</param>
     /// <exception cref="InvalidDataException">A patch is corrupt or the patched data does not match its MD5.</exception>
-    public static byte[] ApplyChain(byte[] baseData, byte[]? baseMd5, IReadOnlyList<byte[]> patchFiles, uint maxFileSize)
+    /// <param name="maxBufferSize">Largest patch data or patched file accepted; sizes come from the patch headers.</param>
+    public static byte[] ApplyChain(byte[] baseData, byte[]? baseMd5, IReadOnlyList<byte[]> patchFiles, uint maxFileSize,
+        int maxBufferSize = MpqSectorReader.DefaultMaxBufferSize)
     {
         byte[] data = baseData;
         byte[] thisMd5 = baseMd5 ?? new byte[16];
@@ -49,7 +51,7 @@ internal static class MpqPatch
                 i++;
 
             var header = Header.Read(patchFiles[i]);
-            data = Apply(data, header, Load(patchFiles[i], header), maxFileSize);
+            data = Apply(data, header, Load(patchFiles[i], header, maxBufferSize), maxFileSize, maxBufferSize);
             if (header.SizeAfterPatch != 0)
                 thisMd5 = header.Md5After;
         }
@@ -57,11 +59,13 @@ internal static class MpqPatch
     }
 
     /// <summary>StormLib LoadFullFilePatch: the transform data after the header (RLE-decoded for BSD0 when smaller).</summary>
-    private static byte[] Load(byte[] patchFile, Header header)
+    private static byte[] Load(byte[] patchFile, Header header, int maxBufferSize)
     {
-        // StormLib allocates SizeOfPatchData and fails when it cannot.
-        if (!header.HasSignatures || header.SizeOfPatchData < HeaderSize || header.SizeOfPatchData - HeaderSize > Array.MaxLength)
+        if (!header.HasSignatures || header.SizeOfPatchData < HeaderSize)
             throw new InvalidDataException("Invalid patch header.");
+        // The size of the decoded patch data comes from the header; RLE data can be tiny.
+        if (header.SizeOfPatchData - HeaderSize > maxBufferSize)
+            throw new InvalidDataException("The patch data exceeds the maximum buffer size.");
 
         int size = (int)(header.SizeOfPatchData - HeaderSize);
         var body = patchFile.AsSpan(HeaderSize);
@@ -110,9 +114,9 @@ internal static class MpqPatch
     }
 
     /// <summary>StormLib ApplyFilePatch: applies one transform and checks md5_after_patch (unless it is zero).</summary>
-    private static byte[] Apply(byte[] source, Header header, byte[] transform, uint maxFileSize)
+    private static byte[] Apply(byte[] source, Header header, byte[] transform, uint maxFileSize, int maxBufferSize)
     {
-        byte[] target = header.PatchType == Copy ? ApplyCopy(transform, header) : ApplyBsd0(source, transform, header, maxFileSize);
+        byte[] target = header.PatchType == Copy ? ApplyCopy(transform, header) : ApplyBsd0(source, transform, header, maxFileSize, maxBufferSize);
         if (header.SizeAfterPatch != 0 && header.Md5After.AsSpan().IndexOfAnyExcept((byte)0) >= 0
             && !MD5.HashData(target.AsSpan(0, (int)Math.Min(header.SizeAfterPatch, (uint)target.Length))).AsSpan().SequenceEqual(header.Md5After))
             throw new InvalidDataException("The patched file does not match its MD5.");
@@ -127,7 +131,7 @@ internal static class MpqPatch
         transform.Length == header.SizeAfterPatch ? transform : throw new InvalidDataException("The COPY patch size does not match.");
 
     /// <summary>StormLib ApplyFilePatch_BSD0 (Blizzard bsdiff40 with 32-bit control entries), with its bounds checks.</summary>
-    private static byte[] ApplyBsd0(byte[] old, byte[] patch, Header header, uint maxFileSize)
+    private static byte[] ApplyBsd0(byte[] old, byte[] patch, Header header, uint maxFileSize, int maxBufferSize)
     {
         if (patch.Length < BsdiffHeaderSize)
             throw new InvalidDataException("The BSD0 patch is truncated.");
@@ -143,6 +147,8 @@ internal static class MpqPatch
         // StormLib patches into a buffer of the largest file size in the chain.
         if (newSize > Math.Max(maxFileSize, header.SizeAfterPatch))
             throw new InvalidDataException("The BSD0 patch is larger than the patched file.");
+        if (newSize > maxBufferSize)
+            throw new InvalidDataException("The patched file exceeds the maximum buffer size.");
         var target = new byte[newSize];
         uint oldSize = (uint)old.Length;
         uint newOffset = 0, oldOffset = 0;
