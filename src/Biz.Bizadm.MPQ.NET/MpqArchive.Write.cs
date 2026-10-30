@@ -20,6 +20,8 @@ public sealed partial class MpqArchive
     // Flags of (listfile) / (attributes) to write on Flush; null when the archive does not maintain them.
     private MpqFileFlags? _listFileFlags;
     private MpqFileFlags? _attributesFileFlags;
+    // Non-null when the archive has a weak signature that Flush recreates and signs (StormLib dwFileFlags3).
+    private MpqFileFlags? _signatureFlags;
     private MpqAttributeFlags _attributeFlags = MpqAttributeFlags.Crc32 | MpqAttributeFlags.FileTime | MpqAttributeFlags.Md5;
 
     public static MpqArchive Create(string path, MpqArchiveCreateOptions? options = null)
@@ -130,6 +132,17 @@ public sealed partial class MpqArchive
             // StormLib SFileFlushArchive: internal files are recreated after the file table is defragmented.
             InvalidateInternalFiles();
             _table.Defragment();
+
+            // StormLib SSignFileCreate: a zeroed (signature) that is signed after the tables are written.
+            // StormLib expects its flags to be MPQ_FILE_EXISTS only: not compressed and not encrypted.
+            if (_signatureFlags is not null)
+            {
+                AddFileCore(ListFile.SignatureName, new byte[MpqSignature.FileSize], MpqFileFlags.None, MpqCompressionType.None, 0,
+                    overwrite: true, savingTables: true);
+                // The CRC is cleared because the content changes when the archive is signed.
+                _table.Find(ListFile.SignatureName)!.Crc32 = 0;
+            }
+
             if (_listFileFlags is { } listFileFlags)
             {
                 byte[] listFile = ListFile.Serialize(_table.Entries
@@ -154,6 +167,8 @@ public sealed partial class MpqArchive
 
             _table.RebuildHet();
             WriteTablesAndHeader();
+            if (_signatureFlags is not null)
+                FinishWeakSignature();
             _dirty = false;
             _internalFilesInvalidated = false;
         }
@@ -266,7 +281,7 @@ public sealed partial class MpqArchive
             return;
         _internalFilesInvalidated = true;
 
-        foreach (string name in new[] { ListFile.ListFileName, ListFile.AttributesName })
+        foreach (string name in new[] { ListFile.ListFileName, ListFile.AttributesName, ListFile.SignatureName })
         {
             int slot;
             while ((slot = _table.FindSlotExact(name, 0)) >= 0)
@@ -277,7 +292,8 @@ public sealed partial class MpqArchive
     /// <summary>Maintained internal files that are waiting to be written (StormLib dwReservedFiles).</summary>
     private int ReservedInternalFiles() =>
         (_listFileFlags is not null && FindExisting(ListFile.ListFileName) is null ? 1 : 0)
-        + (_attributesFileFlags is not null && FindExisting(ListFile.AttributesName) is null ? 1 : 0);
+        + (_attributesFileFlags is not null && FindExisting(ListFile.AttributesName) is null ? 1 : 0)
+        + (_signatureFlags is not null && FindExisting(ListFile.SignatureName) is null ? 1 : 0);
 
     /// <summary>
     /// StormLib FindFreeMpqSpace: the end of the furthest existing file, including its raw chunk MD5s (internal files

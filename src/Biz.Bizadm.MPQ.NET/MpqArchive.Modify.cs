@@ -149,6 +149,9 @@ public sealed partial class MpqArchive
                 _table.Entries[i].FilePosition = positions[i];
             _table.RebuildHet();
             WriteTablesAndHeader();
+            // StormLib flushes the compacted archive, which signs it again (SSignFileFinish).
+            if (_signatureFlags is not null)
+                FinishWeakSignature();
         }
     }
 

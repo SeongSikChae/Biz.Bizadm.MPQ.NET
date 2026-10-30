@@ -10,7 +10,9 @@ namespace Biz.Bizadm.MPQ.NET.Tests;
 /// </summary>
 internal static class StormLibVerifier
 {
-    public static void AssertStormLibReads(string archivePath, MpqFormatVersion version, int sectorSize, IReadOnlyDictionary<string, byte[]> files)
+    /// <param name="weakSignature">Also require SFileVerifyArchive to report a valid weak signature.</param>
+    public static void AssertStormLibReads(string archivePath, MpqFormatVersion version, int sectorSize, IReadOnlyDictionary<string, byte[]> files,
+        bool weakSignature = false)
     {
         string generator = FindGenerator() ?? throw new AssertInconclusiveException("FixtureGenerator is not built.");
         string expectedPath = archivePath + ".expected.json";
@@ -19,6 +21,7 @@ internal static class StormLibVerifier
             archive = Path.GetFileName(archivePath),
             formatVersion = (int)version + 1,
             sectorSize,
+            weakSignature,
             files = files.Select(f => new
             {
                 name = f.Key,

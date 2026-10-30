@@ -117,6 +117,7 @@ public sealed partial class MpqArchive : IDisposable
         // Internal files that exist are rewritten on Flush with their current flags (StormLib InvalidateInternalFile).
         _listFileFlags = FindExisting(ListFile.ListFileName)?.Flags;
         _attributesFileFlags = FindExisting(ListFile.AttributesName)?.Flags;
+        _signatureFlags = FindExisting(ListFile.SignatureName)?.Flags;
 
         byte[]? listFile = ReadInternalFile(ListFile.ListFileName, ListFile.MaxSize, options.Strict);
         if (listFile is not null)
