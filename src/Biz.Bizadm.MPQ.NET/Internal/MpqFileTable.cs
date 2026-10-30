@@ -39,6 +39,8 @@ internal sealed class MpqFileTable
     {
         var hash = HashTableSerializer.Read(stream, headerOffset + header.HashTablePosition, header.HashTableSize);
         var entries = BlockTableSerializer.Read(stream, headerOffset + header.BlockTablePosition, header.BlockTableSize);
+        if (header.FormatVersion >= MpqFormatVersion.Version2 && header.HiBlockTablePosition != 0)
+            BlockTableSerializer.ApplyHiBlockTable(stream, headerOffset + header.HiBlockTablePosition, entries);
         return new MpqFileTable(hash, entries);
     }
 

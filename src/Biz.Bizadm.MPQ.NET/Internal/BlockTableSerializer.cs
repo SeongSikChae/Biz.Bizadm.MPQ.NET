@@ -26,4 +26,16 @@ internal static class BlockTableSerializer
         }
         return entries;
     }
+
+    /// <summary>
+    /// Adds the high 16 bits of each file position from the hi-block table (v2+; not encrypted nor compressed),
+    /// as StormLib does after loading the block table.
+    /// </summary>
+    public static void ApplyHiBlockTable(Stream stream, long position, MpqFileEntry[] entries)
+    {
+        var hi = new ushort[entries.Length];
+        stream.ReadExactlyAt(position, MemoryMarshal.AsBytes(hi.AsSpan()));
+        for (int i = 0; i < entries.Length; i++)
+            entries[i].FilePosition |= (long)hi[i] << 32;
+    }
 }
