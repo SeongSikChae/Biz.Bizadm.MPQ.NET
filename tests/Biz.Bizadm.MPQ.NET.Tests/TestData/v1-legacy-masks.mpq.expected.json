@@ -1,0 +1,54 @@
+{
+  "archive": "v1-legacy-masks.mpq",
+  "formatVersion": 1,
+  "sectorSize": 4096,
+  "weakSignature": false,
+  "patchArchives": [],
+  "files": [
+    {
+      "name": "text\\huffman.txt",
+      "size": 17100,
+      "compressedSize": 10752,
+      "flags": 2147484160,
+      "sha256": "DD9025B5A7D5C155C0013F89899A15C5CF30FF310A08851AF509EDEA1F88BCEB",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "text\\pkware-zlib.txt",
+      "size": 17100,
+      "compressedSize": 985,
+      "flags": 2147484160,
+      "sha256": "DD9025B5A7D5C155C0013F89899A15C5CF30FF310A08851AF509EDEA1F88BCEB",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "sound\\stereo.wav",
+      "size": 44144,
+      "compressedSize": 16385,
+      "flags": 2147484160,
+      "sha256": "89DDD9261CF5160FD5E76C12BD14510922B3DE5E5A7D1F7F4868004A9EB21258",
+      "lossy": true,
+      "internal": false
+    },
+    {
+      "name": "(listfile)",
+      "size": 58,
+      "compressedSize": 65,
+      "flags": 2147680768,
+      "sha256": "002051D0DC0A52F1B20BE87B2C5FFCAE8F8DF4B2AFA0EA041210A3374C121CA9",
+      "lossy": false,
+      "internal": true
+    },
+    {
+      "name": "(attributes)",
+      "size": 148,
+      "compressedSize": 111,
+      "flags": 2147680768,
+      "sha256": "5A870632860A5080B1E64915AAEB5AEDA4FC42355C7F004DE2986B0CA5A5116A",
+      "lossy": false,
+      "internal": true
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "archive": "patch-1.mpq",
+  "formatVersion": 2,
+  "sectorSize": 4096,
+  "weakSignature": false,
+  "baseArchive": "patch-base.mpq",
+  "patchArchives": [
+    "patch-1.mpq"
+  ],
+  "files": [
+    {
+      "name": "readme.txt",
+      "size": 17100,
+      "compressedSize": 1155,
+      "flags": 2147484160,
+      "sha256": "DD9025B5A7D5C155C0013F89899A15C5CF30FF310A08851AF509EDEA1F88BCEB",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "data\\patched.txt",
+      "size": 68,
+      "compressedSize": 35,
+      "flags": 2147484160,
+      "sha256": "AC76514008B12147BF30AB25FB18D8EB082AC5F96237262321078B775B519714",
+      "lossy": false,
+      "internal": false
+    }
+  ]
+}

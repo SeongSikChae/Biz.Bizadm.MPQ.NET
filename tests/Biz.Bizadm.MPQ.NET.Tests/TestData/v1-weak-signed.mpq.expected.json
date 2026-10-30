@@ -1,0 +1,72 @@
+{
+  "archive": "v1-weak-signed.mpq",
+  "formatVersion": 1,
+  "sectorSize": 4096,
+  "weakSignature": true,
+  "patchArchives": [],
+  "files": [
+    {
+      "name": "readme.txt",
+      "size": 17100,
+      "compressedSize": 1155,
+      "flags": 2147484160,
+      "sha256": "DD9025B5A7D5C155C0013F89899A15C5CF30FF310A08851AF509EDEA1F88BCEB",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "data\\random.bin",
+      "size": 20000,
+      "compressedSize": 20024,
+      "flags": 2147484160,
+      "sha256": "D55435582F5BAF28E05B4D202A914AE708B20122B87FEAF317A58D649D97C4A2",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "data\\zeros.bin",
+      "size": 16384,
+      "compressedSize": 148,
+      "flags": 2147484160,
+      "sha256": "832A5C483C1AC35158D6535680F26CE937CAF2B65465A95F79C58BAF9726F51B",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "data\\small.txt",
+      "size": 3,
+      "compressedSize": 11,
+      "flags": 2147484160,
+      "sha256": "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "data\\empty.txt",
+      "size": 0,
+      "compressedSize": 0,
+      "flags": 2147484160,
+      "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "(listfile)",
+      "size": 77,
+      "compressedSize": 69,
+      "flags": 2147680768,
+      "sha256": "25E5757C18F2131A27865631535147549CB3AF1C598DEA0AC86A1941A712EC13",
+      "lossy": false,
+      "internal": true
+    },
+    {
+      "name": "(attributes)",
+      "size": 232,
+      "compressedSize": 177,
+      "flags": 2147680768,
+      "sha256": "BA5D2F966924F38067B08B91587EF56C60E8A69ACEC8F75A485F79C62413D794",
+      "lossy": false,
+      "internal": true
+    }
+  ]
+}

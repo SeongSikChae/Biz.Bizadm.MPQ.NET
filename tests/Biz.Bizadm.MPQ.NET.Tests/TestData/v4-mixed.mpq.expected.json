@@ -1,0 +1,81 @@
+{
+  "archive": "v4-mixed.mpq",
+  "formatVersion": 4,
+  "sectorSize": 4096,
+  "weakSignature": false,
+  "patchArchives": [],
+  "files": [
+    {
+      "name": "sound\\stereo.wav",
+      "size": 44144,
+      "compressedSize": 16245,
+      "flags": 2147484160,
+      "sha256": "89DDD9261CF5160FD5E76C12BD14510922B3DE5E5A7D1F7F4868004A9EB21258",
+      "lossy": true,
+      "internal": false
+    },
+    {
+      "name": "sound\\mono.wav",
+      "size": 22094,
+      "compressedSize": 9514,
+      "flags": 2147484160,
+      "sha256": "85B64240095674660C9FB0995144F87BFD100C06563C51F3BBFF0C4FB85F0734",
+      "lossy": true,
+      "internal": false
+    },
+    {
+      "name": "data\\zeros.bin",
+      "size": 16384,
+      "compressedSize": 94,
+      "flags": 2147484160,
+      "sha256": "832A5C483C1AC35158D6535680F26CE937CAF2B65465A95F79C58BAF9726F51B",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "data\\zeros-bzip2.bin",
+      "size": 16384,
+      "compressedSize": 176,
+      "flags": 2147484160,
+      "sha256": "832A5C483C1AC35158D6535680F26CE937CAF2B65465A95F79C58BAF9726F51B",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "data\\zeros-sparse.bin",
+      "size": 16384,
+      "compressedSize": 176,
+      "flags": 2147484160,
+      "sha256": "832A5C483C1AC35158D6535680F26CE937CAF2B65465A95F79C58BAF9726F51B",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "text\\pkware.txt",
+      "size": 17100,
+      "compressedSize": 1570,
+      "flags": 2147484160,
+      "sha256": "DD9025B5A7D5C155C0013F89899A15C5CF30FF310A08851AF509EDEA1F88BCEB",
+      "lossy": false,
+      "internal": false
+    },
+    {
+      "name": "(listfile)",
+      "size": 112,
+      "compressedSize": 82,
+      "flags": 2164261376,
+      "sha256": "D6A497C1A1FAD0AE8110058A53042F9F03CB727779B1593482BEC0C3D18D9C46",
+      "lossy": false,
+      "internal": true
+    },
+    {
+      "name": "(attributes)",
+      "size": 232,
+      "compressedSize": 152,
+      "flags": 2164261376,
+      "sha256": "0286192880737AAB353E6CDB9E414C8126BC99F2E77D2292A21F10C10E84C765",
+      "lossy": false,
+      "internal": true
+    }
+  ]
+}
