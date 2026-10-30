@@ -23,4 +23,7 @@ internal sealed class MpqFileEntry
     public uint CompressedSize { get; set; }
     public uint FileSize { get; set; }
     public MpqFileFlags Flags { get; set; }
+
+    /// <summary>Snapshot used by open file streams, so later table changes do not affect them.</summary>
+    public MpqFileEntry Clone() => (MpqFileEntry)MemberwiseClone();
 }
