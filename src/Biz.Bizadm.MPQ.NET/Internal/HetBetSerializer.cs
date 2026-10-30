@@ -56,6 +56,48 @@ internal sealed class HetTable
             body[..(int)totalCount].ToArray(), body[(int)totalCount..].ToArray());
     }
 
+    /// <summary>
+    /// StormLib RebuildHetTable: CreateHetTable(entry count, 0, 0x40) with every existing entry inserted in file table
+    /// order (InsertHetEntry).
+    /// </summary>
+    public static HetTable Build(IReadOnlyList<MpqFileEntry> entries)
+    {
+        const int nameHashBitSize = 0x40;
+        int totalCount = entries.Count * 4 / 3;
+        int indexSize = MpqBitArray.BitCount((ulong)entries.Count);
+        var nameHashes = new byte[totalCount];
+        var indexBits = new byte[((long)indexSize * totalCount + 7) / 8];
+        indexBits.AsSpan().Fill(0xFF);
+
+        for (int fileIndex = 0; fileIndex < entries.Count; fileIndex++)
+        {
+            if (!entries[fileIndex].Flags.HasFlag(MpqFileFlags.Exists))
+                continue;
+
+            ulong nameHash = entries[fileIndex].NameHash;
+            int index = (int)(nameHash % (ulong)totalCount);
+            while (nameHashes[index] != FreeEntry)
+                index = (index + 1) % totalCount; // TotalCount exceeds the number of existing entries
+            nameHashes[index] = (byte)(nameHash >> (nameHashBitSize - 8));
+            MpqBitArray.SetBits(indexBits, (long)indexSize * index, indexSize, (ulong)fileIndex);
+        }
+
+        return new HetTable(entries.Count, totalCount, nameHashBitSize, indexSize, indexSize, nameHashes, indexBits);
+    }
+
+    /// <summary>StormLib CreateHetHeader + TranslateHetTable: the table without the 12-byte extended header.</summary>
+    public byte[] Serialize()
+    {
+        var output = new byte[HeaderSize + _nameHashes.Length + _indexBits.Length];
+        uint[] fields = [(uint)output.Length, (uint)EntryCount, (uint)TotalCount, (uint)NameHashBitSize,
+            (uint)IndexSizeTotal, 0, (uint)IndexSize, (uint)_indexBits.Length];
+        for (int i = 0; i < fields.Length; i++)
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(i * 4), fields[i]);
+        _nameHashes.CopyTo(output, HeaderSize);
+        _indexBits.CopyTo(output, HeaderSize + _nameHashes.Length);
+        return output;
+    }
+
     /// <summary>Masked 64-bit name hash as stored in BET entries.</summary>
     public ulong HashName(string name) => (JenkinsHash.HashFileName(name) & AndMask) | OrMask;
 
@@ -160,5 +202,80 @@ internal static class BetTable
                 entries[fileIndex].NameHash = ((ulong)nameHash1 << (int)countNameHash2) | nameHash2;
             }
         });
+    }
+
+    /// <summary>
+    /// StormLib CreateBetHeader + TranslateBetTable: the table without the 12-byte extended header. Every entry is
+    /// stored, also the ones that do not exist; field widths are the bit counts of the largest values.
+    /// </summary>
+    public static byte[] Serialize(IReadOnlyList<MpqFileEntry> entries, HetTable het)
+    {
+        // StormLib InitFileFlagArray fills unused slots with 0xCC; one slot is written even without entries.
+        var flagArray = new List<uint>();
+        int FlagIndex(MpqFileFlags flags)
+        {
+            int index = flagArray.IndexOf((uint)flags);
+            if (index < 0)
+            {
+                flagArray.Add((uint)flags);
+                index = flagArray.Count - 1;
+            }
+            return index;
+        }
+
+        long maxPosition = 0;
+        uint maxFileSize = 0, maxCmpSize = 0;
+        int maxFlagIndex = 0;
+        foreach (var entry in entries)
+        {
+            maxPosition = Math.Max(maxPosition, entry.FilePosition);
+            maxFileSize = Math.Max(maxFileSize, entry.FileSize);
+            maxCmpSize = Math.Max(maxCmpSize, entry.CompressedSize);
+            maxFlagIndex = Math.Max(maxFlagIndex, FlagIndex(entry.Flags));
+        }
+        if (flagArray.Count == 0)
+            flagArray.Add(0xCCCCCCCC);
+
+        int countFilePos = MpqBitArray.BitCount((ulong)maxPosition);
+        int countFileSize = MpqBitArray.BitCount(maxFileSize);
+        int countCmpSize = MpqBitArray.BitCount(maxCmpSize);
+        int countFlag = MpqBitArray.BitCount((ulong)maxFlagIndex + 1);
+        int indexFileSize = countFilePos;
+        int indexCmpSize = indexFileSize + countFileSize;
+        int indexFlag = indexCmpSize + countCmpSize;
+        int entrySize = countFilePos + countFileSize + countCmpSize + countFlag;
+        int flagCount = maxFlagIndex + 1;
+        int nameHash2 = het.NameHashBitSize - 8;
+        long fileTableSize = ((long)entrySize * entries.Count + 7) / 8;
+        long nameHashSize = ((long)nameHash2 * entries.Count + 7) / 8;
+
+        var output = new byte[checked((int)(HeaderSize + flagCount * 4L + fileTableSize + nameHashSize))];
+        uint[] fields =
+        [
+            (uint)output.Length, (uint)entries.Count, 0x10, (uint)entrySize,
+            0, (uint)indexFileSize, (uint)indexCmpSize, (uint)indexFlag, (uint)(indexFlag + countFlag),
+            (uint)countFilePos, (uint)countFileSize, (uint)countCmpSize, (uint)countFlag, 0,
+            (uint)nameHash2, 0, (uint)nameHash2, (uint)nameHashSize, (uint)flagCount,
+        ];
+        for (int i = 0; i < fields.Length; i++)
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(i * 4), fields[i]);
+
+        var flags = output.AsSpan(HeaderSize, flagCount * 4);
+        for (int i = 0; i < flagCount; i++)
+            BinaryPrimitives.WriteUInt32LittleEndian(flags[(i * 4)..], flagArray[i]);
+
+        var fileTable = output.AsSpan(HeaderSize + flagCount * 4, (int)fileTableSize);
+        var nameHashes = output.AsSpan(HeaderSize + flagCount * 4 + (int)fileTableSize);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            long bit = (long)entrySize * i;
+            MpqBitArray.SetBits(fileTable, bit, countFilePos, (ulong)entry.FilePosition);
+            MpqBitArray.SetBits(fileTable, bit + indexFileSize, countFileSize, entry.FileSize);
+            MpqBitArray.SetBits(fileTable, bit + indexCmpSize, countCmpSize, entry.CompressedSize);
+            MpqBitArray.SetBits(fileTable, bit + indexFlag, countFlag, (ulong)FlagIndex(entry.Flags));
+            MpqBitArray.SetBits(nameHashes, (long)nameHash2 * i, nameHash2, entry.NameHash);
+        }
+        return output;
     }
 }

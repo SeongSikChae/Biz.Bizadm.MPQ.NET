@@ -234,13 +234,6 @@ public sealed class MpqArchiveWriteV2Tests
         Assert.AreEqual(0, BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(0x2A)));
     }
 
-    [TestMethod]
-    public void Create_RejectsV3AndV4()
-    {
-        foreach (var version in new[] { MpqFormatVersion.Version3, MpqFormatVersion.Version4 })
-            Assert.ThrowsExactly<NotSupportedException>(() => MpqArchive.Create(new MemoryStream(), new MpqArchiveCreateOptions { FormatVersion = version }));
-    }
-
     private static string FileName(int i) => $@"files\file{i:D4}.txt";
 
     private static void AddManyFiles(MpqArchive mpq, int start, int count)

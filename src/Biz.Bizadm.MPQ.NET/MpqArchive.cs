@@ -126,7 +126,8 @@ public sealed partial class MpqArchive : IDisposable
         {
             try
             {
-                _attributeFlags = MpqAttributes.Apply(attributes, blockTableSize, _table.Entries) & ~MpqAttributeFlags.PatchBit;
+                // StormLib SAttrFileLoad keeps the flags, so (attributes) is written back with the same parts.
+                _attributeFlags = MpqAttributes.Apply(attributes, blockTableSize, _table.Entries);
             }
             catch (InvalidDataException) when (!options.Strict)
             {

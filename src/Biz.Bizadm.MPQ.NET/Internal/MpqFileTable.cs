@@ -11,7 +11,7 @@ internal sealed class MpqFileTable
 
     private readonly MpqHashEntry[] _hash;
     private readonly List<MpqFileEntry> _entries;
-    private readonly HetTable? _het;
+    private HetTable? _het;
 
     public MpqFileTable(MpqHashEntry[] hash, MpqFileEntry[] entries, HetTable? het = null)
     {
@@ -148,6 +148,9 @@ internal sealed class MpqFileTable
                 if (match.FileName is null)
                 {
                     match.FileName = candidate;
+                    // StormLib AllocateFileName: with a HET table the name hash is recomputed from the name.
+                    if (_het is not null)
+                        match.NameHash = _het.HashName(candidate);
                     assigned = true;
                 }
             }
@@ -234,9 +237,16 @@ internal sealed class MpqFileTable
         return best;
     }
 
-    // ---- Modification (classic hash table only; HET/BET archives are rewritten in a later unit) ----
+    // ---- Modification ----
 
     public int HashTableSize => _hash.Length;
+
+    /// <summary>StormLib RebuildHetTable: recreates the HET table from the file table, when the archive has one.</summary>
+    public void RebuildHet()
+    {
+        if (_het is not null)
+            _het = HetTable.Build(_entries);
+    }
 
     /// <summary>Hash slot of <paramref name="name"/> with exactly this locale and platform (StormLib GetHashEntryExact), or -1.</summary>
     public int FindSlotExact(string name, ushort locale, byte platform = 0)

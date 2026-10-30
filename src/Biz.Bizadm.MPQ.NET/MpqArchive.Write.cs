@@ -43,7 +43,7 @@ public sealed partial class MpqArchive
         if (!stream.CanRead || !stream.CanWrite || !stream.CanSeek)
             throw new ArgumentException("The stream must be readable, writable and seekable.", nameof(stream));
         options ??= MpqArchiveCreateOptions.Default;
-        if (options.FormatVersion is not (MpqFormatVersion.Version1 or MpqFormatVersion.Version2))
+        if (options.FormatVersion is not (MpqFormatVersion.Version1 or MpqFormatVersion.Version2 or MpqFormatVersion.Version3))
             throw new NotSupportedException($"Creating {options.FormatVersion} archives is not supported yet.");
         if (options.HashTableSize < 4 || (options.HashTableSize & (options.HashTableSize - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(options), "HashTableSize must be a power of two of at least 4.");
@@ -65,12 +65,17 @@ public sealed partial class MpqArchive
         var hash = Enumerable.Repeat(new MpqHashEntry(MpqHashEntry.Free, MpqHashEntry.Free, 0xFFFF, 0xFF, 0xFF, MpqHashEntry.Free),
             options.HashTableSize).ToArray();
 
-        return new MpqArchive(stream, leaveOpen, header, null, 0, new MpqFileTable(hash, []), MpqOpenMode.ReadWrite)
+        // StormLib SFileCreateArchive2: v3+ archives get a HET table; SFileCreateArchive adds patch bits to (attributes).
+        bool v3 = options.FormatVersion >= MpqFormatVersion.Version3;
+        var table = new MpqFileTable(hash, [], v3 ? HetTable.Build([]) : null);
+        return new MpqArchive(stream, leaveOpen, header, null, 0, table, MpqOpenMode.ReadWrite)
         {
             _created = true,
             _dirty = true,
             _listFileFlags = options.CreateListFile ? DefaultInternalFlags : null,
             _attributesFileFlags = options.CreateAttributes ? DefaultInternalFlags : null,
+            _attributeFlags = MpqAttributeFlags.Crc32 | MpqAttributeFlags.FileTime | MpqAttributeFlags.Md5
+                | (v3 ? MpqAttributeFlags.PatchBit : 0),
         };
     }
 
@@ -143,6 +148,7 @@ public sealed partial class MpqArchive
                 AddFileCore(ListFile.AttributesName, attributes, attributesFlags, MpqCompressionType.Zlib, 0, overwrite: true, savingTables: true);
             }
 
+            _table.RebuildHet();
             WriteTablesAndHeader();
             _dirty = false;
             _internalFilesInvalidated = false;
@@ -153,10 +159,8 @@ public sealed partial class MpqArchive
     {
         if (Mode != MpqOpenMode.ReadWrite)
             throw new InvalidOperationException("The archive is open for reading only.");
-        if (Header.FormatVersion is not (MpqFormatVersion.Version1 or MpqFormatVersion.Version2))
+        if (Header.FormatVersion is not (MpqFormatVersion.Version1 or MpqFormatVersion.Version2 or MpqFormatVersion.Version3))
             throw new NotSupportedException($"Writing {Header.FormatVersion} archives is not supported yet.");
-        if (_table.Het is not null)
-            throw new NotSupportedException("Writing archives with HET/BET tables is not supported yet.");
     }
 
     /// <summary>StormLib SFileAddFile_Init + SFileAddFile_Write + SFileAddFile_Finish for in-memory data.</summary>
@@ -213,7 +217,11 @@ public sealed partial class MpqArchive
             // StormLib finishes the MD5 only after writing data, so empty files keep a zero MD5.
             entry.Md5 = data.Length == 0 ? null : MD5.HashData(data);
             entry.FileTime = DateTime.UtcNow.ToFileTimeUtc();
+            // StormLib AllocateFileEntry / SFileAddFile_Finish: name hash for the HET table, which is then rebuilt.
+            if (_table.Het is { } het)
+                entry.NameHash = het.HashName(name);
             _table.SetSlot(slot, name, locale, blockIndex);
+            _table.RebuildHet();
             _dirty = true;
         }
     }
@@ -274,7 +282,22 @@ public sealed partial class MpqArchive
 
     private void WriteTablesAndHeader()
     {
-        long tablePosition = FindFreeSpace(includeInternalFiles: true);
+        long position = FindFreeSpace(includeInternalFiles: true);
+
+        // StormLib SaveMPQTables: HET, BET, hash, block and hi-block tables in this order.
+        long hetPosition = 0, betPosition = 0;
+        if (_table.Het is { } het)
+        {
+            byte[] hetTable = ExtTable(MpqTableReader.HetSignature, het.Serialize(), StormCrypto.HashTableKey);
+            byte[] betTable = ExtTable(MpqTableReader.BetSignature, BetTable.Serialize(_table.Entries, het), StormCrypto.BlockTableKey);
+            hetPosition = position;
+            betPosition = hetPosition + hetTable.Length;
+            _stream.Position = _headerOffset + hetPosition;
+            _stream.Write(hetTable);
+            _stream.Write(betTable);
+            position = betPosition + betTable.Length;
+        }
+        long tablePosition = position;
 
         byte[] hash = HashTableSerializer.Serialize(_table.HashEntries);
         StormCrypto.EncryptBlock(hash.AsSpan(), StormCrypto.HashTableKey);
@@ -301,6 +324,8 @@ public sealed partial class MpqArchive
             BlockTablePosition = blockPosition,
             BlockTableSize = (uint)_table.Entries.Count,
             HiBlockTablePosition = hiBlockPosition,
+            HetTablePosition = hetPosition,
+            BetTablePosition = betPosition,
             ArchiveSize = archiveSize,
         };
 
@@ -326,6 +351,12 @@ public sealed partial class MpqArchive
             BinaryPrimitives.WriteUInt16LittleEndian(header[0x28..], (ushort)(tablePosition >> 32));
             BinaryPrimitives.WriteUInt16LittleEndian(header[0x2A..], (ushort)(blockPosition >> 32));
         }
+        if (Header.FormatVersion >= MpqFormatVersion.Version3)
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(header[0x2C..], (ulong)archiveSize);
+            BinaryPrimitives.WriteUInt64LittleEndian(header[0x34..], (ulong)betPosition);
+            BinaryPrimitives.WriteUInt64LittleEndian(header[0x3C..], (ulong)hetPosition);
+        }
         _stream.Position = _headerOffset;
         _stream.Write(header);
 
@@ -333,8 +364,24 @@ public sealed partial class MpqArchive
         _stream.Flush();
     }
 
-    private static uint HeaderSize(MpqFormatVersion version) =>
-        (uint)(version == MpqFormatVersion.Version1 ? MpqHeaderReader.HeaderSizeV1 : MpqHeaderReader.HeaderSizeV2);
+    private static uint HeaderSize(MpqFormatVersion version) => (uint)(version switch
+    {
+        MpqFormatVersion.Version1 => MpqHeaderReader.HeaderSizeV1,
+        MpqFormatVersion.Version2 => MpqHeaderReader.HeaderSizeV2,
+        _ => MpqHeaderReader.HeaderSizeV3,
+    });
+
+    /// <summary>StormLib SaveExtTable without compression: the extended header and the encrypted table.</summary>
+    private static byte[] ExtTable(uint signature, byte[] table, uint key)
+    {
+        var output = new byte[12 + table.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(output, signature);
+        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(4), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(8), (uint)table.Length);
+        table.CopyTo(output, 12);
+        StormCrypto.EncryptBlock(output.AsSpan(12), key);
+        return output;
+    }
 
     private MpqFileFlags ResolveInternalFileFlags(MpqFileFlags flags, long fileSize) =>
         flags == DefaultInternalFlags ? DefaultInternalFileFlags(Header.FormatVersion, fileSize) : flags;
