@@ -1,4 +1,8 @@
 <Solution>
-  <Folder Name="/src/" />
-  <Folder Name="/tests/" />
+  <Folder Name="/src/">
+    <Project Path="src/Biz.Bizadm.MPQ.NET/Biz.Bizadm.MPQ.NET.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Biz.Bizadm.MPQ.NET.Tests/Biz.Bizadm.MPQ.NET.Tests.csproj" />
+  </Folder>
 </Solution>
