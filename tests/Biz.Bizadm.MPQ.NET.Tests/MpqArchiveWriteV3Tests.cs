@@ -161,15 +161,8 @@ public sealed class MpqArchiveWriteV3Tests
         StormLibVerifier.AssertStormLibReads(path, MpqFormatVersion.Version3, expected.SectorSize, files);
     }
 
-    [TestMethod]
-    public void Create_RejectsV4()
-    {
-        Assert.ThrowsExactly<NotSupportedException>(() =>
-            MpqArchive.Create(new MemoryStream(), new MpqArchiveCreateOptions { FormatVersion = MpqFormatVersion.Version4 }));
-    }
-
     /// <summary>Looks every name up through the HET table only and compares with the hash table result.</summary>
-    private static void AssertHetFindsEveryFile(string path, IEnumerable<string> names)
+    internal static void AssertHetFindsEveryFile(string path, IEnumerable<string> names)
     {
         using var stream = File.OpenRead(path);
         var (header, _, offset) = MpqHeaderReader.Find(stream);

@@ -15,8 +15,12 @@ internal static class MpqSectorWriter
     /// <param name="flags">Final block flags (already filtered).</param>
     /// <param name="sectorSize">Archive sector size; single-unit files use one sector of the file size.</param>
     /// <param name="fileKey">File key for encrypted files, 0 otherwise.</param>
+    /// <param name="emptySectorCrc">
+    /// StormLib WriteSectorChecksums: archives with raw chunk MD5s (v4) keep the sector CRC table empty.
+    /// </param>
     /// <returns>The stored bytes; their length is the compressed size.</returns>
-    public static byte[] Build(ReadOnlySpan<byte> data, MpqFileFlags flags, MpqCompressionType compression, int sectorSize, uint fileKey)
+    public static byte[] Build(ReadOnlySpan<byte> data, MpqFileFlags flags, MpqCompressionType compression, int sectorSize, uint fileKey,
+        bool emptySectorCrc = false)
     {
         // StormLib AllocateSectorBuffer: nothing is stored for empty files.
         if (data.IsEmpty)
@@ -33,7 +37,7 @@ internal static class MpqSectorWriter
 
         using var output = new MemoryStream();
         var offsets = new uint[sectorCount + 1 + (sectorCrc ? 1 : 0)];
-        var checksums = sectorCrc ? new uint[sectorCount] : null;
+        var checksums = sectorCrc && !emptySectorCrc ? new uint[sectorCount] : null;
         if (offsetTable)
         {
             offsets[0] = (uint)(offsets.Length * 4);
@@ -64,6 +68,10 @@ internal static class MpqSectorWriter
             byte[] packed = MpqCompression.Compress(crcTable, MpqCompressionType.Zlib);
             output.Write(packed);
             offsets[sectorCount + 1] = (uint)output.Position;
+        }
+        else if (sectorCrc)
+        {
+            offsets[sectorCount + 1] = offsets[sectorCount];
         }
 
         if (offsetTable)
