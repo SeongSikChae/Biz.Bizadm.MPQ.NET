@@ -39,6 +39,12 @@ public sealed record MpqHeader
     public MpqHeaderV4? V4 { get; init; }
 
     public int SectorSize => 0x200 << SectorSizeShift;
+
+    /// <summary>
+    /// StormLib MPQ_FLAG_MALFORMED: the header had to be repaired (wrong version or size, odd table positions).
+    /// Such archives are read leniently and cannot be modified.
+    /// </summary>
+    internal bool Malformed { get; init; }
 }
 
 /// <summary>Version 4 header fields: compressed table sizes and MD5 checksums.</summary>

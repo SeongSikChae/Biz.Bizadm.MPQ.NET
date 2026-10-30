@@ -10,27 +10,37 @@ internal static class MpqTableReader
     public const uint HetSignature = 0x1A544548; // "HET\x1A"
     public const uint BetSignature = 0x1A544542; // "BET\x1A"
     private const int ExtHeaderSize = 12;
+    private const long MaxZeroFill = 0x10000000;
 
     /// <summary>
     /// Loads a hash or block table of <paramref name="tableSize"/> bytes stored in <paramref name="storedSize"/> bytes
     /// (smaller means zlib/other-compressed with a v2 mask). The MD5, when given, covers the stored bytes.
     /// </summary>
-    public static byte[] LoadTable(Stream stream, long position, long storedSize, long tableSize, uint key,
-        ReadOnlyMemory<byte> md5, bool strict, string tableName)
+    /// <remarks>
+    /// StormLib LoadMpqTable: a table may run past the end of the file (Spazzler, NP_Protect); what exists is read, the
+    /// rest is zero and decrypted with it, and <paramref name="cut"/> is set.
+    /// </remarks>
+    /// <returns>Null when the table starts at or beyond the end of the file.</returns>
+    public static byte[]? LoadTable(Stream stream, long position, long storedSize, long tableSize, uint key,
+        ReadOnlyMemory<byte> md5, bool strict, string tableName, out bool cut)
     {
+        cut = false;
         if (tableSize > Array.MaxLength)
             throw new InvalidDataException($"The {tableName} is too large.");
 
         bool compressed = storedSize > 0 && storedSize < tableSize;
         long readSize = compressed ? storedSize : tableSize;
-        // Checked before allocating, so a bogus size cannot allocate more than the stream holds.
-        // TODO(unit 19): StormLib reads what exists and zero-fills tables that run past the end of the file.
-        if (position < 0 || position > stream.Length - readSize)
-            throw new InvalidDataException($"The {tableName} extends past the end of the archive.");
+        if (position < 0 || position >= stream.Length)
+            return null;
 
+        long available = Math.Min(readSize, stream.Length - position);
+        // StormLib allocates whatever the header says; a cap keeps bogus sizes from allocating gigabytes of zeros.
+        if (readSize - available > MaxZeroFill)
+            throw new InvalidDataException($"The {tableName} runs too far past the end of the file.");
         var stored = new byte[readSize];
-        stream.ReadExactlyAt(position, stored);
-        VerifyMd5(stored, md5, strict, tableName);
+        cut = available < readSize;
+        stream.ReadExactlyAt(position, stored.AsSpan(0, (int)available));
+        VerifyMd5(stored.AsSpan(0, (int)available), md5, strict, tableName);
 
         StormCrypto.DecryptBlock(stored.AsSpan(), key);
         if (!compressed)

@@ -12,6 +12,8 @@ public sealed partial class MpqArchive : IDisposable
     private readonly bool _leaveOpen;
     private string? _path;
     private int _openFileStreams;
+    // StormLib MPQ_FLAG_MALFORMED: the archive was repaired when opened, so it is read-only (MPQ_FLAG_READ_ONLY).
+    private bool _malformed;
     // End of the data read by open file streams; new data is not written before it, even when the file is deleted.
     private long _openStreamDataEnd;
     private readonly long _headerOffset;
@@ -85,7 +87,10 @@ public sealed partial class MpqArchive : IDisposable
         options ??= MpqOpenOptions.Default;
         var (header, userData, headerOffset) = MpqHeaderReader.Find(stream, options.Strict);
         var table = MpqFileTable.Load(stream, header, headerOffset, options.Strict);
-        var archive = new MpqArchive(stream, leaveOpen, header, userData, headerOffset, table, mode);
+        bool malformed = header.Malformed || table.Malformed;
+        if (malformed && options.Strict)
+            throw new InvalidDataException("The archive is malformed (its header or tables had to be repaired).");
+        var archive = new MpqArchive(stream, leaveOpen, header, userData, headerOffset, table, mode) { _malformed = malformed };
         archive.LoadInternalFiles(options);
         return archive;
     }

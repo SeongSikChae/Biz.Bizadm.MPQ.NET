@@ -195,11 +195,11 @@ public sealed class MpqArchiveWriteV2Tests
     }
 
     /// <summary>
-    /// StormLib reads a v2 header whose size is not 0x2C as a malformed v1 header; writing such an archive must
-    /// keep the 32-byte header and not overwrite the data after it.
+    /// StormLib reads a v2 header whose size is not 0x2C as a malformed v1 header; malformed archives are read-only,
+    /// so the 44-byte header can never overwrite the data after the 32-byte one.
     /// </summary>
     [TestMethod]
-    public void MalformedV2Header_IsReadAndWrittenAsV1()
+    public void MalformedV2Header_IsReadAsV1AndNotWritable()
     {
         using var stream = new MemoryStream();
         using (var mpq = MpqArchive.Create(stream, leaveOpen: true))
@@ -210,14 +210,8 @@ public sealed class MpqArchiveWriteV2Tests
         {
             Assert.AreEqual(MpqFormatVersion.Version1, mpq.Header.FormatVersion);
             Assert.AreEqual(0x20u, mpq.Header.HeaderSize);
-            mpq.AddFile("b.txt", new MemoryStream(Random));
-        }
-
-        using (var mpq = MpqArchive.Open(stream, leaveOpen: true))
-        {
-            Assert.AreEqual(MpqFormatVersion.Version1, mpq.Header.FormatVersion);
             CollectionAssert.AreEqual(Text, ReadAll(mpq, "a.txt"));
-            CollectionAssert.AreEqual(Random, ReadAll(mpq, "b.txt"));
+            Assert.ThrowsExactly<InvalidOperationException>(() => mpq.AddFile("b.txt", new MemoryStream(Random)));
         }
     }
 

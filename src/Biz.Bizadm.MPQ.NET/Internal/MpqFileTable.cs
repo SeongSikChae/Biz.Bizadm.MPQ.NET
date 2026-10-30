@@ -61,18 +61,26 @@ internal sealed class MpqFileTable
             het = HetTable.Parse(hetData);
         }
 
+        bool malformed = header.Malformed, cut = false;
         MpqHashEntry[] hash = [];
         if (header.HashTableSize != 0)
         {
-            byte[] hashData = MpqTableReader.LoadTable(stream, headerOffset + header.HashTablePosition, layout.HashTableSize,
+            byte[]? hashData = MpqTableReader.LoadTable(stream,
+                MpqHeaderReader.FileOffset(header.FormatVersion, headerOffset, header.HashTablePosition), layout.HashTableSize,
                 header.HashTableSize * (long)HashTableSerializer.EntrySize, StormCrypto.HashTableKey,
-                v4?.Md5HashTable ?? default, strict, "hash table");
-            hash = HashTableSerializer.Parse(hashData);
+                v4?.Md5HashTable ?? default, strict, "hash table", out bool hashCut);
+            if (hashData is not null)
+                hash = HashTableSerializer.Parse(hashData);
+            cut |= hashCut;
         }
 
-        // StormLib LoadAnyHashTable: an archive without hash and HET tables is an empty archive.
+        // StormLib LoadAnyHashTable: an archive without hash and HET table sizes is empty; otherwise one must load.
         if (het is null && hash.Length == 0)
-            return new MpqFileTable([], []);
+        {
+            return header.HashTableSize == 0 && layout.HetTableSize == 0
+                ? new MpqFileTable([], [])
+                : throw new InvalidDataException("Neither the hash table nor the HET table can be loaded.");
+        }
 
         byte[]? betData = null;
         uint betCount = 0;
@@ -90,11 +98,16 @@ internal sealed class MpqFileTable
         byte[]? blockData = null;
         if (hash.Length != 0 && header.BlockTableSize != 0)
         {
-            blockData = MpqTableReader.LoadTable(stream, headerOffset + header.BlockTablePosition, layout.BlockTableSize,
+            blockData = MpqTableReader.LoadTable(stream,
+                MpqHeaderReader.FileOffset(header.FormatVersion, headerOffset, header.BlockTablePosition), layout.BlockTableSize,
                 header.BlockTableSize * (long)BlockTableSerializer.EntrySize, StormCrypto.BlockTableKey,
-                v4?.Md5BlockTable ?? default, strict, "block table");
+                v4?.Md5BlockTable ?? default, strict, "block table", out bool blockCut)
+                ?? throw new InvalidDataException("The block table lies outside the file.");
+            cut |= blockCut;
         }
         int blockCount = blockData is null ? 0 : blockData.Length / BlockTableSerializer.EntrySize;
+        // StormLib sets MPQ_FLAG_MALFORMED together with MPQ_FLAG_HASH_TABLE_CUT / MPQ_FLAG_BLOCK_TABLE_CUT.
+        malformed |= cut;
 
         var entries = new MpqFileEntry[Math.Max(blockCount, (int)betCount)];
         for (int i = 0; i < entries.Length; i++)
@@ -105,13 +118,59 @@ internal sealed class MpqFileTable
 
         if (blockData is not null)
         {
-            BlockTableSerializer.Parse(blockData, entries);
+            var blocks = new MpqFileEntry[blockCount];
+            for (int i = 0; i < blocks.Length; i++)
+                blocks[i] = new MpqFileEntry();
+            BlockTableSerializer.Parse(blockData, blocks);
+            BuildFromBlockTable(hash, blocks, entries, header, headerOffset, stream.Length, malformed, cut);
             if (header.FormatVersion >= MpqFormatVersion.Version2 && header.HiBlockTablePosition != 0)
                 BlockTableSerializer.ApplyHiBlockTable(stream, headerOffset + header.HiBlockTablePosition, entries, blockCount,
                     v4?.Md5HiBlockTable ?? default, strict);
         }
 
-        return new MpqFileTable(hash, entries, het);
+        return new MpqFileTable(hash, entries, het) { Malformed = malformed };
+    }
+
+    /// <summary>The header or a table had to be repaired (StormLib MPQ_FLAG_MALFORMED).</summary>
+    public bool Malformed { get; private init; }
+
+    /// <summary>
+    /// StormLib BuildFileTableFromBlockTable: only blocks that a valid hash entry points to become file entries
+    /// (IsValidHashEntry1: index within the block table, MPQ_FILE_EXISTS, below 2 GB in malformed archives, and data
+    /// starting inside the file). When a table was cut, block indexes are renumbered in hash table order.
+    /// </summary>
+    private static void BuildFromBlockTable(MpqHashEntry[] hash, MpqFileEntry[] blocks, MpqFileEntry[] entries, MpqHeader header,
+        long headerOffset, long fileSize, bool malformed, bool cut)
+    {
+        int[]? remap = cut ? Enumerable.Repeat(-1, blocks.Length).ToArray() : null;
+        int itemCount = 0;
+        for (int i = 0; i < hash.Length; i++)
+        {
+            uint index = hash[i].BlockIndex & MpqHashEntry.BlockIndexMask;
+            if (index >= blocks.Length)
+                continue;
+            var block = blocks[index];
+            if (!block.Flags.HasFlag(MpqFileFlags.Exists)
+                || malformed && block.FileSize >= 0x80000000
+                || MpqHeaderReader.FileOffset(header.FormatVersion, headerOffset, block.FilePosition) >= fileSize)
+                continue;
+
+            int newIndex = (int)index;
+            if (remap is not null)
+            {
+                if (remap[index] < 0)
+                    remap[index] = itemCount++;
+                newIndex = remap[index];
+                hash[i] = hash[i] with { BlockIndex = (uint)newIndex };
+            }
+
+            var entry = entries[newIndex];
+            // The position is only meaningful for files with data.
+            entry.FilePosition = block.FilePosition == 0 && block.FileSize == 0 ? header.HeaderSize : block.FilePosition;
+            entry.Flags = block.Flags;
+            entry.FileSize = block.FileSize;
+            entry.CompressedSize = block.CompressedSize;
+        }
     }
 
     /// <summary>

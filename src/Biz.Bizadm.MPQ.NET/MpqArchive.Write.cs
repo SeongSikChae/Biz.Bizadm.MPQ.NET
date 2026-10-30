@@ -178,6 +178,8 @@ public sealed partial class MpqArchive
     {
         if (Mode != MpqOpenMode.ReadWrite)
             throw new InvalidOperationException("The archive is open for reading only.");
+        if (_malformed)
+            throw new InvalidOperationException("The archive is malformed and was repaired when opened; it cannot be modified.");
     }
 
     /// <summary>Size of the raw data chunks whose MD5s follow file data and HET/BET tables (v4), or 0.</summary>

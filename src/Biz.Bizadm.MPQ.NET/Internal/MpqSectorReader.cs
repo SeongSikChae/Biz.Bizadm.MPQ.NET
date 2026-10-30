@@ -17,8 +17,9 @@ internal sealed class MpqSectorReader
     private const uint PatchInfoValid = 0x80000000;
 
     private readonly Stream _stream;
-    // Start of the sector data; patch files have a TPatchInfo block before it.
-    private readonly long _filePosition;
+    // Start of the file in the stream (StormLib RawFilePos); patch files have a TPatchInfo block of _patchInfoLength bytes.
+    private readonly long _rawPosition;
+    private readonly uint _patchInfoLength;
     private readonly MpqFileEntry _entry;
     private readonly MpqFormatVersion _version;
     private readonly uint _fileKey;
@@ -31,7 +32,7 @@ internal sealed class MpqSectorReader
     public MpqSectorReader(Stream stream, long headerOffset, MpqFileEntry entry, MpqFormatVersion version, int sectorSize, uint fileKey)
     {
         _stream = stream;
-        _filePosition = headerOffset + entry.FilePosition;
+        _rawPosition = MpqHeaderReader.FileOffset(version, headerOffset, entry.FilePosition);
         _entry = entry;
         _version = version;
         _fileKey = fileKey;
@@ -41,12 +42,12 @@ internal sealed class MpqSectorReader
         if (entry.Flags.HasFlag(MpqFileFlags.PatchFile))
         {
             // StormLib AllocatePatchInfo: the data size comes from the patch info, the sectors follow it.
-            var info = ReadRaw(_filePosition, PatchInfoSize);
+            var info = ReadRaw(_rawPosition, PatchInfoSize);
             uint length = BinaryPrimitives.ReadUInt32LittleEndian(info);
             if ((BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(4)) & PatchInfoValid) == 0 || length > 0x400)
                 throw new InvalidDataException("Invalid patch info.");
             _dataSize = BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(8));
-            _filePosition += length;
+            _patchInfoLength = length;
             // StormLib ReadMpqFileSingleUnit takes sizeof(TPatchInfo) off the compressed size.
             if (_singleUnitSize > PatchInfoSize)
                 _singleUnitSize -= PatchInfoSize;
@@ -66,6 +67,13 @@ internal sealed class MpqSectorReader
     public long Length => _dataSize;
 
     private bool IsCompressed => (_entry.Flags & CompressMask) != 0;
+
+    /// <summary>
+    /// StormLib CalculateRawSectorOffset: v1 positions are 32-bit (protectors use offsets that wrap), and the patch info
+    /// is added after that.
+    /// </summary>
+    private long SectorPosition(long offset) =>
+        (_version == MpqFormatVersion.Version1 ? (_rawPosition + offset) & 0xFFFFFFFF : _rawPosition + offset) + _patchInfoLength;
 
     private bool IsEncrypted => _entry.Flags.HasFlag(MpqFileFlags.Encrypted);
 
@@ -90,7 +98,7 @@ internal sealed class MpqSectorReader
 
         if (!IsCompressed)
         {
-            byte[] raw = ReadRaw(_filePosition + (long)index * SectorSize, length);
+            byte[] raw = ReadRaw(SectorPosition((long)index * SectorSize), length);
             Decrypt(raw, (uint)index);
             raw.CopyTo(output);
             return length;
@@ -98,7 +106,7 @@ internal sealed class MpqSectorReader
 
         uint[] offsets = _sectorOffsets ??= ReadSectorOffsets();
         uint start = offsets[index], end = offsets[index + 1];
-        byte[] data = ReadRaw(_filePosition + start, (int)(end - start));
+        byte[] data = ReadRaw(SectorPosition(start), (int)(end - start));
         Decrypt(data, (uint)index);
         Decompress(data, output);
         return length;
@@ -116,13 +124,13 @@ internal sealed class MpqSectorReader
     {
         if (!IsCompressed)
         {
-            byte[] plain = ReadRaw(_filePosition, output.Length);
+            byte[] plain = ReadRaw(SectorPosition(0), output.Length);
             Decrypt(plain, 0);
             plain.CopyTo(output);
             return;
         }
 
-        byte[] data = ReadRaw(_filePosition, (int)_singleUnitSize);
+        byte[] data = ReadRaw(SectorPosition(0), (int)_singleUnitSize);
         Decrypt(data, 0);
         Decompress(data, output);
     }
@@ -154,7 +162,9 @@ internal sealed class MpqSectorReader
     {
         int count = SectorCount + 1;
         var offsets = new uint[count];
-        _stream.ReadExactlyAt(_filePosition, MemoryMarshal.AsBytes(offsets.AsSpan()));
+        if (SectorPosition(0) > _stream.Length - count * 4L)
+            throw new InvalidDataException("File data lies outside the archive.");
+        _stream.ReadExactlyAt(SectorPosition(0), MemoryMarshal.AsBytes(offsets.AsSpan()));
         if (IsEncrypted)
             StormCrypto.DecryptBlock(offsets, RequireKey() - 1);
 
