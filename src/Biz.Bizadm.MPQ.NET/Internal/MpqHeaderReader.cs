@@ -71,6 +71,12 @@ internal static class MpqHeaderReader
         // StormLib (SBaseFileTable.cpp, default case) treats unknown format versions as a v1 header.
         if (version > MpqFormatVersion.Version4)
             version = MpqFormatVersion.Version1;
+        // StormLib marks a v2 header of another size as malformed and reads it as a v1 header.
+        if (version == MpqFormatVersion.Version2 && headerSize != HeaderSizeV2)
+        {
+            version = MpqFormatVersion.Version1;
+            headerSize = HeaderSizeV1;
+        }
         long hashTablePos = BinaryPrimitives.ReadUInt32LittleEndian(h[0x10..]);
         long blockTablePos = BinaryPrimitives.ReadUInt32LittleEndian(h[0x14..]);
         long archiveSize = BinaryPrimitives.ReadUInt32LittleEndian(h[0x08..]);

@@ -10,6 +10,9 @@ public sealed partial class MpqArchive
     private const MpqFileFlags ValidFlagsV1Created = MpqFileFlags.Implode | MpqFileFlags.Compress | MpqFileFlags.Encrypted
         | MpqFileFlags.FixKey | MpqFileFlags.DeleteMarker | MpqFileFlags.SectorCrc | MpqFileFlags.Signature | MpqFileFlags.Exists;
 
+    // StormLib MPQ_FILE_DEFAULT_INTERNAL: the flags are chosen from the file size when the internal file is first saved.
+    private const MpqFileFlags DefaultInternalFlags = (MpqFileFlags)0xFFFFFFFF;
+
     private bool _dirty;
     private bool _created;
     private bool _internalFilesInvalidated;
@@ -40,34 +43,34 @@ public sealed partial class MpqArchive
         if (!stream.CanRead || !stream.CanWrite || !stream.CanSeek)
             throw new ArgumentException("The stream must be readable, writable and seekable.", nameof(stream));
         options ??= MpqArchiveCreateOptions.Default;
-        if (options.FormatVersion != MpqFormatVersion.Version1)
+        if (options.FormatVersion is not (MpqFormatVersion.Version1 or MpqFormatVersion.Version2))
             throw new NotSupportedException($"Creating {options.FormatVersion} archives is not supported yet.");
         if (options.HashTableSize < 4 || (options.HashTableSize & (options.HashTableSize - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(options), "HashTableSize must be a power of two of at least 4.");
         if (options.SectorSizeShift is < 0 or > 15)
             throw new ArgumentOutOfRangeException(nameof(options), "SectorSizeShift must be between 0 and 15.");
 
+        uint headerSize = HeaderSize(options.FormatVersion);
         var header = new MpqHeader
         {
-            HeaderSize = MpqHeaderReader.HeaderSizeV1,
-            FormatVersion = MpqFormatVersion.Version1,
+            HeaderSize = headerSize,
+            FormatVersion = options.FormatVersion,
             SectorSizeShift = (ushort)options.SectorSizeShift,
-            HashTablePosition = MpqHeaderReader.HeaderSizeV1,
-            BlockTablePosition = MpqHeaderReader.HeaderSizeV1 + options.HashTableSize * 16L,
+            HashTablePosition = headerSize,
+            BlockTablePosition = headerSize + options.HashTableSize * 16L,
             HashTableSize = (uint)options.HashTableSize,
             BlockTableSize = 0,
-            ArchiveSize = MpqHeaderReader.HeaderSizeV1 + options.HashTableSize * 16L,
+            ArchiveSize = headerSize + options.HashTableSize * 16L,
         };
         var hash = Enumerable.Repeat(new MpqHashEntry(MpqHashEntry.Free, MpqHashEntry.Free, 0xFFFF, 0xFF, 0xFF, MpqHashEntry.Free),
             options.HashTableSize).ToArray();
 
-        var internalFlags = DefaultInternalFileFlags(MpqFormatVersion.Version1, 0);
         return new MpqArchive(stream, leaveOpen, header, null, 0, new MpqFileTable(hash, []), MpqOpenMode.ReadWrite)
         {
             _created = true,
             _dirty = true,
-            _listFileFlags = options.CreateListFile ? internalFlags : null,
-            _attributesFileFlags = options.CreateAttributes ? internalFlags : null,
+            _listFileFlags = options.CreateListFile ? DefaultInternalFlags : null,
+            _attributesFileFlags = options.CreateAttributes ? DefaultInternalFlags : null,
         };
     }
 
@@ -125,7 +128,10 @@ public sealed partial class MpqArchive
                     .Select(e => e.FileName!));
                 // StormLib does not create an empty (listfile).
                 if (listFile.Length != 0)
+                {
+                    _listFileFlags = listFileFlags = ResolveInternalFileFlags(listFileFlags, listFile.Length);
                     AddFileCore(ListFile.ListFileName, listFile, listFileFlags, MpqCompressionType.Zlib, 0, overwrite: true, savingTables: true);
+                }
             }
 
             if (_attributesFileFlags is { } attributesFlags)
@@ -133,6 +139,7 @@ public sealed partial class MpqArchive
                 // The (attributes) entry itself is counted, with empty values (StormLib reserved entry).
                 var entries = _table.Entries.Append(new MpqFileEntry()).ToList();
                 byte[] attributes = MpqAttributes.Serialize(_attributeFlags, entries, entries.Count);
+                _attributesFileFlags = attributesFlags = ResolveInternalFileFlags(attributesFlags, attributes.Length);
                 AddFileCore(ListFile.AttributesName, attributes, attributesFlags, MpqCompressionType.Zlib, 0, overwrite: true, savingTables: true);
             }
 
@@ -146,7 +153,7 @@ public sealed partial class MpqArchive
     {
         if (Mode != MpqOpenMode.ReadWrite)
             throw new InvalidOperationException("The archive is open for reading only.");
-        if (Header.FormatVersion != MpqFormatVersion.Version1)
+        if (Header.FormatVersion is not (MpqFormatVersion.Version1 or MpqFormatVersion.Version2))
             throw new NotSupportedException($"Writing {Header.FormatVersion} archives is not supported yet.");
         if (_table.Het is not null)
             throw new NotSupportedException("Writing archives with HET/BET tables is not supported yet.");
@@ -274,37 +281,63 @@ public sealed partial class MpqArchive
         byte[] block = BlockTableSerializer.Serialize(_table.Entries);
         StormCrypto.EncryptBlock(block.AsSpan(), StormCrypto.BlockTableKey);
 
+        // StormLib TranslateBlockTable: the hi-block table is written only when a file starts above 4 GB.
+        byte[]? hiBlock = null;
+        if (_table.Entries.Any(e => e.FilePosition >> 32 != 0))
+        {
+            hiBlock = new byte[_table.Entries.Count * 2];
+            for (int i = 0; i < _table.Entries.Count; i++)
+                BinaryPrimitives.WriteUInt16LittleEndian(hiBlock.AsSpan(i * 2), (ushort)(_table.Entries[i].FilePosition >> 32));
+        }
+
         long blockPosition = tablePosition + hash.Length;
-        long archiveSize = blockPosition + block.Length;
+        long hiBlockPosition = hiBlock is null ? 0 : blockPosition + block.Length;
+        long archiveSize = blockPosition + block.Length + (hiBlock?.Length ?? 0);
+        uint headerSize = HeaderSize(Header.FormatVersion);
         Header = Header with
         {
-            HeaderSize = MpqHeaderReader.HeaderSizeV1,
+            HeaderSize = headerSize,
             HashTablePosition = tablePosition,
             BlockTablePosition = blockPosition,
             BlockTableSize = (uint)_table.Entries.Count,
+            HiBlockTablePosition = hiBlockPosition,
             ArchiveSize = archiveSize,
         };
 
         _stream.Position = _headerOffset + tablePosition;
         _stream.Write(hash);
         _stream.Write(block);
+        if (hiBlock is not null)
+            _stream.Write(hiBlock);
 
-        Span<byte> header = stackalloc byte[MpqHeaderReader.HeaderSizeV1];
+        Span<byte> header = stackalloc byte[(int)headerSize];
         BinaryPrimitives.WriteUInt32LittleEndian(header, MpqHeaderReader.HeaderSignature);
-        BinaryPrimitives.WriteUInt32LittleEndian(header[0x04..], MpqHeaderReader.HeaderSizeV1);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[0x04..], headerSize);
         BinaryPrimitives.WriteUInt32LittleEndian(header[0x08..], (uint)archiveSize);
-        BinaryPrimitives.WriteUInt16LittleEndian(header[0x0C..], (ushort)MpqFormatVersion.Version1);
+        BinaryPrimitives.WriteUInt16LittleEndian(header[0x0C..], (ushort)Header.FormatVersion);
         BinaryPrimitives.WriteUInt16LittleEndian(header[0x0E..], Header.SectorSizeShift);
         BinaryPrimitives.WriteUInt32LittleEndian(header[0x10..], (uint)tablePosition);
         BinaryPrimitives.WriteUInt32LittleEndian(header[0x14..], (uint)blockPosition);
         BinaryPrimitives.WriteUInt32LittleEndian(header[0x18..], Header.HashTableSize);
         BinaryPrimitives.WriteUInt32LittleEndian(header[0x1C..], Header.BlockTableSize);
+        if (Header.FormatVersion >= MpqFormatVersion.Version2)
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(header[0x20..], (ulong)hiBlockPosition);
+            BinaryPrimitives.WriteUInt16LittleEndian(header[0x28..], (ushort)(tablePosition >> 32));
+            BinaryPrimitives.WriteUInt16LittleEndian(header[0x2A..], (ushort)(blockPosition >> 32));
+        }
         _stream.Position = _headerOffset;
         _stream.Write(header);
 
         _stream.SetLength(_headerOffset + archiveSize);
         _stream.Flush();
     }
+
+    private static uint HeaderSize(MpqFormatVersion version) =>
+        (uint)(version == MpqFormatVersion.Version1 ? MpqHeaderReader.HeaderSizeV1 : MpqHeaderReader.HeaderSizeV2);
+
+    private MpqFileFlags ResolveInternalFileFlags(MpqFileFlags flags, long fileSize) =>
+        flags == DefaultInternalFlags ? DefaultInternalFileFlags(Header.FormatVersion, fileSize) : flags;
 
     /// <summary>StormLib GetDefaultSpecialFileFlags.</summary>
     private static MpqFileFlags DefaultInternalFileFlags(MpqFormatVersion version, long fileSize) =>
